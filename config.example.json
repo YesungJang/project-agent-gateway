@@ -10,6 +10,7 @@
     "lint": ["uv", "run", "--no-sync", "ruff", "check", "."]
   },
   "full_validation": ["unit", "lint"],
+  "require_branch_protection": true,
   "required_checks": ["test", "lint"],
   "timeout_seconds": 600,
   "ci_wait_seconds": 300,

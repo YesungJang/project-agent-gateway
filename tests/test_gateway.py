@@ -189,6 +189,13 @@ class GatewayTests(unittest.TestCase):
             self.worker().tests(["$(echo hacked)"])
 
     def test_merge_gate_fail_closed(self):
+        for required in (None, True, False):
+            with self.subTest(require_branch_protection=required):
+                if required is not None:
+                    self.cfg["require_branch_protection"] = required
+                self.check_merge_gate_fail_closed()
+
+    def check_merge_gate_fail_closed(self):
         w = self.worker()
         good = {
             "headRefOid": "head",
@@ -201,6 +208,7 @@ class GatewayTests(unittest.TestCase):
             "files": [{"path": "src/greeting.py"}],
             "statusCheckRollup": [{"name": "unit", "conclusion": "SUCCESS"}],
         }
+        w.cfg["protected_paths"] = ["src/payments.py"]
         protection = {
             "enforce_admins": {"enabled": True},
             "required_status_checks": {"strict": True, "contexts": ["unit"]},
@@ -211,12 +219,38 @@ class GatewayTests(unittest.TestCase):
         for key, value in [
             ("headRefOid", "other"),
             ("baseRefOid", "new"),
+            ("baseRefName", "other"),
+            ("state", "CLOSED"),
             ("isDraft", True),
+            ("mergeable", "CONFLICTING"),
+            ("mergeable", "UNKNOWN"),
+            ("mergeStateStatus", "UNKNOWN"),
+            ("mergeStateStatus", "BEHIND"),
             ("mergeStateStatus", "BLOCKED"),
             ("statusCheckRollup", []),
             ("statusCheckRollup", [{"name": "unit", "conclusion": "SKIPPED"}]),
             ("statusCheckRollup", [{"name": "unit", "conclusion": None}]),
             ("files", [{"path": "src/auth.py"}]),
+            ("files", [{"path": "outside/file.py"}]),
+            ("files", [{"path": "src/payments.py"}]),
+            *[
+                ("statusCheckRollup", [{"name": "unit", "conclusion": status}])
+                for status in (
+                    "FAILURE",
+                    "CANCELLED",
+                    "TIMED_OUT",
+                    "UNKNOWN",
+                    "NEUTRAL",
+                )
+            ],
+            ("statusCheckRollup", [{"name": "other", "conclusion": "SUCCESS"}]),
+            (
+                "statusCheckRollup",
+                [
+                    {"name": "unit", "conclusion": "SUCCESS"},
+                    {"name": "unit", "conclusion": "FAILURE"},
+                ],
+            ),
         ]:
             changed = copy.deepcopy(good)
             changed[key] = value
@@ -228,8 +262,55 @@ class GatewayTests(unittest.TestCase):
                 w.merge_gate("pr", "head", "base")
         w.gh = lambda *args: json.dumps(good)
         protection["required_status_checks"]["strict"] = False
-        with self.assertRaises(gateway.ApprovalRequired):
+        if self.cfg.get("require_branch_protection", True):
+            with self.assertRaises(gateway.ApprovalRequired):
+                w.merge_gate("pr", "head", "base")
+        else:
             w.merge_gate("pr", "head", "base")
+
+    def test_optional_branch_protection_and_api_errors(self):
+        good = {
+            "headRefOid": "head",
+            "baseRefOid": "base",
+            "baseRefName": "main",
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "files": [{"path": "src/greeting.py"}],
+            "statusCheckRollup": [{"name": "unit", "conclusion": "SUCCESS"}],
+        }
+        for required in (None, True, False):
+            if required is not None:
+                self.cfg["require_branch_protection"] = required
+            w = self.worker()
+            for status in (403, 404, 500):
+                with (
+                    self.subTest(required=required, status=status),
+                    patch.object(w, "gh", return_value=json.dumps(good)),
+                    patch.object(
+                        w, "run", side_effect=gateway.ApprovalRequired(f"HTTP {status}")
+                    ) as api,
+                ):
+                    if required is False:
+                        w.merge_gate("pr", "head", "base")
+                        api.assert_not_called()
+                    else:
+                        with self.assertRaises(gateway.ApprovalRequired):
+                            w.merge_gate("pr", "head", "base")
+                        api.assert_called_once()
+            with (
+                patch.object(w, "gh", side_effect=gateway.ApprovalRequired("HTTP 403")),
+                self.assertRaises(gateway.ApprovalRequired),
+            ):
+                w.merge_gate("pr", "head", "base")
+
+    def test_branch_protection_option_must_be_boolean(self):
+        for value in (None, 0, 1, "false", "true", [], {}):
+            with self.subTest(value=value), self.assertRaises(TypeError):
+                gateway.validate_config(
+                    {**self.cfg, "require_branch_protection": value}
+                )
 
     def test_claude_command_is_restricted_and_prompt_is_stdin(self):
         w = self.worker()
@@ -338,6 +419,69 @@ class GatewayTests(unittest.TestCase):
         self.assertGreater(close_index, w.calls.index(merge))
         self.assertEqual(
             json.loads((w.state / "issue-1.json").read_text())["state"], "done"
+        )
+
+    def test_publish_without_protection_preserves_verification_gates(self):
+        self.cfg["require_branch_protection"] = False
+        for failure in (None, "plan", "task", "full", "risk", "ci", "api"):
+            with self.subTest(failure=failure):
+                self.check_publish_verification_gates(failure)
+
+    def check_publish_verification_gates(self, failure):
+        w = self.published_worker(blocked=failure == "ci")
+        original_verify = w.verify
+        original_run = w.run
+        original_gh = w.gh
+
+        def verify(payload):
+            if failure == "risk":
+                raise gateway.ApprovalRequired("Risky change")
+            if (failure == "plan" and "plan" in payload) or (
+                failure == "task" and "diff" in payload
+            ):
+                return {"verdict": "FAIL", "reasons": ["Rejected"]}
+            return original_verify(payload)
+
+        def run(argv, *args, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.fail("Branch-protection API must not be called")
+            return original_run(argv, *args, **kwargs)
+
+        def gh(*args):
+            if failure == "api" and args[:2] == ("pr", "view"):
+                raise gateway.ApprovalRequired("HTTP 500")
+            return original_gh(*args)
+
+        w.verify = verify
+        w.run = run
+        w.gh = gh
+        w.cfg = copy.deepcopy(self.cfg)
+        if failure == "full":
+            w.cfg["validation"]["full"] = [
+                "python3",
+                "-c",
+                "raise SystemExit(1)",
+            ]
+            w.cfg["full_validation"] = ["full"]
+        issue = {
+            "number": 10 + len(list(w.state.glob("issue-*.json"))),
+            "title": "Add greeting",
+            "body": "safe",
+        }
+        if failure is None:
+            w.process(issue)
+            self.assertEqual(w.verifications, 2)
+            merge = next(c for c in w.calls if c[:2] == ("pr", "merge"))
+            self.assertEqual(merge[-2:], ("--match-head-commit", w.job_data["head"]))
+        else:
+            with self.assertRaises(gateway.ApprovalRequired):
+                w.process(issue)
+            self.assertFalse(
+                any(c[:2] in (("pr", "merge"), ("issue", "close")) for c in w.calls)
+            )
+        state = json.loads((w.state / f"issue-{issue['number']}.json").read_text())
+        self.assertEqual(
+            state["state"], "done" if failure is None else "approval-required"
         )
 
     def test_publish_failed_ci_retains_pr_and_never_merges(self):

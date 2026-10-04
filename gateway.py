@@ -175,6 +175,8 @@ def validate_config(cfg):
             raise ValueError("Validation commands must be argv arrays")
     if any(x not in cfg["validation"] for x in cfg["full_validation"]):
         raise ValueError("Unknown full validation command")
+    if not isinstance(cfg.get("require_branch_protection", True), bool):
+        raise TypeError("require_branch_protection must be a boolean")
     if not cfg.get("required_checks"):
         raise ValueError("At least one required CI check must be configured")
     if not 1 <= cfg.get("timeout_seconds", 600) <= 3600:
@@ -420,6 +422,9 @@ class Gateway:
             raise GatePending("Waiting for GitHub mergeability")
         if data["mergeable"] != "MERGEABLE" or data["mergeStateStatus"] != "CLEAN":
             raise ApprovalRequired("Merge blocked or branch requires update")
+        # Only protection is optional; every local/PR/CI gate above still applies.
+        if self.cfg.get("require_branch_protection", True) is False:
+            return
         # Require GitHub protection too; never use --admin or --auto.
         protection = json.loads(
             self.run(
