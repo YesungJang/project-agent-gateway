@@ -1,0 +1,17 @@
+{
+  "repo": "/absolute/path/to/trusted/repository",
+  "github_repo": "OWNER/REPOSITORY",
+  "base": "main",
+  "mode": "NORMAL",
+  "allowed_paths": ["src/*.py", "tests/*.py", "docs/*.md"],
+  "protected_paths": ["src/access_control.py", "src/payments/*"],
+  "validation": {
+    "unit": ["mise", "exec", "--", "python3", "-m", "unittest", "discover", "-s", "tests"],
+    "lint": ["uv", "run", "--no-sync", "ruff", "check", "."]
+  },
+  "full_validation": ["unit", "lint"],
+  "required_checks": ["test", "lint"],
+  "timeout_seconds": 600,
+  "ci_wait_seconds": 300,
+  "repair_attempts": 2
+}
