@@ -4,6 +4,8 @@
   "base": "main",
   "mode": "NORMAL",
   "allowed_paths": ["src/*.py", "tests/*.py", "docs/*.md"],
+  "read_context_paths": ["README.md", "package.json", "Cargo.toml", "*config.*", "scripts/*", "prepare-wasm.mjs"],
+  "plan_repair_attempts": 2,
   "protected_paths": ["src/access_control.py", "src/payments/*"],
   "validation": {
     "unit": ["mise", "exec", "--", "python3", "-m", "unittest", "discover", "-s", "tests"],

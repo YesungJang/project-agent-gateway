@@ -539,6 +539,145 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(gateway.ApprovalRequired, "risk"):
             gateway.Gateway.verify(w, {"task": "risky"})
 
+    def test_plan_context_workspace_read_scope_is_not_write_scope(self):
+        self.cfg["allowed_paths"] = ["README.md"]
+        self.cfg["read_context_paths"] = ["package.json", "Cargo.toml", "prepare-wasm.mjs", "playwright.config.ts"]
+        files = {"README.md": "Build instructions", "package.json": '{"scripts":{"build":"node prepare-wasm.mjs"}}',
+                 "Cargo.toml": '[package]\nname = "demo"', "prepare-wasm.mjs": "// build wasm",
+                 "playwright.config.ts": "// test configuration"}
+        for name, content in files.items():
+            (self.repo / name).write_text(content)
+        git(self.repo, "add", "--", *files)
+        git(self.repo, "commit", "-m", "context fixture")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        w = self.worker()
+        original_run = w.run
+        seen = []
+
+        def run(argv, stdin=None, cwd=None):
+            if argv[0] != "codex":
+                return original_run(argv, stdin, cwd)
+            workspace = Path(cwd)
+            seen.append(workspace)
+            for name, content in files.items():
+                expected = "Updated build instructions" if name == "README.md" and len(seen) > 1 else content
+                self.assertEqual((workspace / name).read_text(), expected)
+                self.assertEqual((workspace / name).stat().st_mode & 0o222, 0)
+            self.assertIn("read-only", argv)
+            self.assertNotIn("--approve-for-me", argv)
+            Path(argv[argv.index("--output-last-message") + 1]).write_text(
+                json.dumps({"verdict": "PASS", "reasons": [], "risky": False}))
+            return ""
+
+        w.run = run
+        w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+        original_claude = w.claude
+
+        def claude(payload, schema):
+            if schema == gateway.PLAN_SCHEMA:
+                self.assertEqual(payload["source_files"], files)
+                return original_claude(payload, schema)
+            return {"edits": [{"path": "README.md", "content": "Updated build instructions"}]}
+
+        w.claude = claude
+        w.process({"number": 9, "title": "Document build", "body": "Use package.json and Cargo.toml"})
+        self.assertEqual(len(seen), 2)
+        worktree = Path(w.job_data["worktree"])
+        self.assertEqual(git(worktree, "diff", "--name-only", w.job_data["base"], "HEAD"), "README.md")
+        self.assertEqual(json.loads((w.state / "issue-9.json").read_text())["state"], "pr-ready")
+        gateway.check_paths(["README.md"], w.cfg)
+        for name in files.keys() - {"README.md"}:
+            with self.assertRaises(gateway.ApprovalRequired):
+                w.apply({"edits": [{"path": name, "content": "changed"}]})
+
+    def test_plan_repair_feedback_bound_and_fresh_verifiers(self):
+        for limit, failures in ((0, 1), (2, 2), (2, 3)):
+            with self.subTest(limit=limit, failures=failures):
+                w = self.worker()
+                w.job = 9
+                w.cfg = {**self.cfg, "plan_repair_attempts": limit}
+                payloads, workspaces = [], []
+                original_claude = w.claude
+
+                def claude(payload, schema):
+                    payloads.append(payload)
+                    return original_claude(payload, schema)
+
+                def run(argv, stdin=None, cwd=None):
+                    workspaces.append(cwd)
+                    verdict = "FAIL" if len(workspaces) <= failures else "PASS"
+                    Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps(
+                        {"verdict": verdict, "risky": False,
+                         "reasons": ["Include Cargo build prerequisite"] if verdict == "FAIL" else []}))
+                    return ""
+
+                w.claude = claude
+                w.run = run
+                w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+                if failures > limit:
+                    with self.assertRaisesRegex(gateway.ApprovalRequired, "repair limit"):
+                        w.plan_gate({"source_files": {}}, "NORMAL")
+                else:
+                    self.assertIn("tasks", w.plan_gate({"source_files": {}}, "NORMAL"))
+                self.assertEqual(len(payloads), min(failures + 1, limit + 1))
+                self.assertEqual(len(set(workspaces)), len(workspaces))
+                if len(payloads) > 1:
+                    self.assertEqual(payloads[1]["feedback"], ["Include Cargo build prerequisite"])
+                    self.assertIn("tasks", payloads[1]["previous_plan"])
+
+    def test_verifier_failures_do_not_repair_plan(self):
+        for failure in ("context", "missing-output", "malformed", "timeout", "workspace"):
+            with self.subTest(failure=failure):
+                w = self.worker()
+                w.job = 9
+
+                def run(argv, stdin=None, cwd=None):
+                    if failure == "timeout":
+                        raise gateway.ApprovalRequired("Timeout: codex")
+                    if failure == "workspace":
+                        raise FileNotFoundError("Missing verifier workspace")
+                    output = Path(argv[argv.index("--output-last-message") + 1])
+                    if failure == "context":
+                        output.write_text(json.dumps({"verdict": "ERROR", "risky": False,
+                            "reasons": ["package.json/Cargo.toml unavailable; cannot verify"]}))
+                    elif failure == "malformed":
+                        output.write_text("invalid JSON")
+                    return ""
+
+                w.run = run
+                w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+                with patch.object(w, "claude", wraps=w.claude) as planner:
+                    with self.assertRaisesRegex(gateway.VerificationFailure, "context/infrastructure") as exc:
+                        w.plan_gate({"source_files": {"README.md": "readme"}}, "NORMAL")
+                    self.assertNotIn("Plan disagreement", str(exc.exception))
+                    self.assertEqual(planner.call_count, 1)
+                self.assertEqual(w.job_data["plan_gate"], "ERROR")
+
+    def test_context_denies_secrets_symlinks_and_incomplete_sources(self):
+        w = self.worker()
+        for name in (".env", ".env.local", ".envrc", ".git/config", ".ssh/id_rsa",
+                     ".aws/credentials", "credentials.json", "secrets/data.json", "server.key",
+                     "../README.md", "/tmp/README.md", ".npmrc"):
+            with self.subTest(name=name):
+                with patch.object(w, "run", return_value=name + "\x00"):
+                    w.cfg = {**self.cfg, "read_context_paths": ["*"]}
+                    self.assertEqual(w.read_context(), {})
+                with self.assertRaises(gateway.VerificationFailure):
+                    gateway.Gateway.verify(w, {"source_files": {name: "never copied"}})
+        w.cfg = {**self.cfg, "read_context_paths": ["package.json"]}
+        with patch.object(w, "run", return_value="package.json\x00"):
+            with self.assertRaisesRegex(gateway.VerificationFailure, "Missing/unreadable"):
+                w.read_context()
+            (self.repo / "package.json").symlink_to(self.repo / "docs/readme.md")
+            with self.assertRaisesRegex(gateway.VerificationFailure, "Symlink"):
+                w.read_context()
+
+    def test_plan_repair_config_requires_bounded_integer(self):
+        for value in (-1, 6, True, 1.5, "2", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                gateway.validate_config({**self.cfg, "plan_repair_attempts": value})
+        self.assertEqual(gateway.validate_config(self.cfg).get("plan_repair_attempts", 2), 2)
+
     def test_second_worker_lock_rejected(self):
         import fcntl
 

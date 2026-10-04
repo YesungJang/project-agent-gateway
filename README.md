@@ -32,7 +32,7 @@ queued ラベルを付けた Issue を古い番号から1件処理して終了�
 - `.env` / `.env.*` / `.git` / `.ssh` / `.aws`、パス逸脱、シンボリックリンク、許可範囲外の編集は拒否する。
 - 依存/lock、migration/SQL、CI/隠しパス、infra/Terraform/AWS、auth/permission/secret/security/config/gateway、指示書、シェルスクリプトは承認へ昇格する。意味上の認証・権限変更を完全に判定することはできないため、リポジトリ管理者が protected_paths を追加する。
 - Git hooks は Gateway の Git 操作で無効。GitHub は設定の origin と一致する必要がある。各タスクを1コミットにする。
-- テスト失敗/FAIL は最大 repair_attempts 回修復する。計画の不一致、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
+- タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
 - 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、全 CI 成功、必須 CI、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
 - CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
 - PR は計画・検証コマンド・head/base・実行結果の監査記録。Issue を自動 close する参照形式は使わず、マージ確認後のみ close。
@@ -52,3 +52,21 @@ NORMAL がデフォルト。FAST は独立検証を省略し PR まで（自動�
 ## 現時点の制約
 
 GitHub 認証、Claude/Codex 認証、必要なラベル・CI、既定では branch protection の事前設定が必要。認証設定や権限を変更しない。GitHub の base 更新と API 呼び出しの間には競合の余地があるため、既定では strict protection による GitHub 側の最終判定も必須。`require_branch_protection=false` でも既存の base SHA 一致と CLEAN 判定を維持するが、判定後の base 更新を GitHub 側の strict protection で防ぐ保証はなくなる。ローカルの失敗注入 E2E を tests に用意。実サービス E2E は明示的な外部送信承認を得てから行う。
+
+## 読み取り文脈と Plan Gate
+
+`allowed_paths` は編集許可だけを表す。`read_context_paths` は信頼済み管理者が指定する読み取り用パターンで、編集許可を追加しない。Git 管理下の対象ファイルと編集許可済みファイルの完全な本文を Claude に渡し、Codex の一時 workspace に同じ相対パスでコピーする。コピーは mode 0444、Codex 自体も `--sandbox read-only` で毎回新規起動する。元リポジトリへの書き込み権限は与えない。
+
+省略時の読み取り対象は `README.md`, `package.json`, `Cargo.toml`, `*config.*`, `scripts/*`, `prepare-wasm.mjs`, `Makefile`, `justfile`, `pyproject.toml`, `mise.toml`。設定例はこれらの一部を明示している。追加のスクリプトや設定が必要なら信頼済み設定にパスを追加する。Issue や計画に書かれたパスによる自動拡張はしない。例えば `allowed_paths=["README.md"]` でも manifest とビルド設定は読めるが、適用・差分・PR の各編集ゲートでは README.md 以外を許可しない。
+
+`.env*`, `.git`, `.ssh`, `.aws`、既知の認証設定、secret/credential/password/token/private-key 名、鍵ファイルはコピー対象から除外する。シンボリックリンク、選択済みファイルの欠落・読み取り不能・サイズ超過は文脈エラーで停止する（1ファイル100KB、総量2MB）。文脈は黙って切り詰めない。ファイル名による除外は任意のソース内に埋め込まれた秘密の検出ではないため、読み取り対象は管理者が確認する。CLI sandbox 自体の読み取り隔離に関する上記の制約は変わらない。
+
+Plan Gate の状態遷移:
+
+- Claude 計画生成 → 構造・テスト名検査 → 新規 Codex 検証。
+- `PASS` → タスク実装へ。
+- `FAIL`（十分な文脈に基づく具体的な計画不一致）または不正な計画構造 → 前の計画と具体的フィードバックを Claude に返す → 再計画 → 新規 Codex 検証。
+- 修復は `plan_repair_attempts` 回まで（既定2、整数0〜5）。初回を含め最大3計画。上限到達 → `approval-required`。
+- `ERROR`（文脈不足・workspace/起動/タイムアウト/出力解析などの検証基盤エラー）→ 診断付き `approval-required`。計画修復には入らない。危険変更の検出も即時停止。
+
+Plan Gate の結果・試行回数・フィードバックを state に保存する。FAST は従来どおり独立検証を省略する。ローカル回帰テストはサービス境界をモックし、実際の文脈収集・一時 workspace 構築・編集拒否・修復遷移を検証する。
