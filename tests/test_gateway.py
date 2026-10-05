@@ -590,6 +590,89 @@ class GatewayTests(unittest.TestCase):
             with self.assertRaises(gateway.ApprovalRequired):
                 w.apply({"edits": [{"path": name, "content": "changed"}]})
 
+    def test_laplogos_nested_context_and_absent_root_manifest(self):
+        self.cfg["allowed_paths"] = ["README.md"]
+        files = {"README.md": "Build instructions", "laplogos_web/package.json": '{"scripts":{"build":"node prepare-wasm.mjs"}}',
+                 "laplogos_core/Cargo.toml": '[package]\nname = "demo"', "scripts/prepare-wasm.mjs": "// build wasm",
+                 "laplogos_web/playwright.config.ts": "// test configuration"}
+        for name, content in files.items():
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text(content)
+        git(self.repo, "add", "--", *files)
+        git(self.repo, "commit", "-m", "context fixture")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        w = self.worker()
+        original_run = w.run
+        seen = []
+
+        def run(argv, stdin=None, cwd=None):
+            if argv[0] != "codex":
+                return original_run(argv, stdin, cwd)
+            workspace = Path(cwd)
+            seen.append(workspace)
+            payload = json.loads(stdin.split("Give concrete reasons for FAIL/ERROR.\n", 1)[1])
+            self.assertIn("Cargo.toml", payload["repository_manifest"]["absent"])
+            self.assertFalse((workspace / "Cargo.toml").exists())
+            for name, content in files.items():
+                expected = "Updated build instructions" if name == "README.md" and len(seen) > 1 else content
+                self.assertEqual((workspace / name).read_text(), expected)
+                self.assertEqual((workspace / name).stat().st_mode & 0o222, 0)
+            self.assertIn("read-only", argv)
+            self.assertNotIn("--approve-for-me", argv)
+            Path(argv[argv.index("--output-last-message") + 1]).write_text(
+                json.dumps({"verdict": "PASS", "reasons": [], "risky": False}))
+            return ""
+
+        w.run = run
+        w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+        original_claude = w.claude
+
+        def claude(payload, schema):
+            if schema == gateway.PLAN_SCHEMA:
+                self.assertEqual(payload["source_files"], files)
+                return original_claude(payload, schema)
+            return {"edits": [{"path": "README.md", "content": "Updated build instructions"}]}
+
+        w.claude = claude
+        w.process({"number": 9, "title": "Document build", "body": "Use package.json and Cargo.toml"})
+        self.assertEqual(len(seen), 2)
+        worktree = Path(w.job_data["worktree"])
+        self.assertEqual(git(worktree, "diff", "--name-only", w.job_data["base"], "HEAD"), "README.md")
+        self.assertEqual(json.loads((w.state / "issue-9.json").read_text())["state"], "pr-ready")
+        gateway.check_paths(["README.md"], w.cfg)
+        for name in files.keys() - {"README.md"}:
+            with self.assertRaises(gateway.ApprovalRequired):
+                w.apply({"edits": [{"path": name, "content": "changed"}]})
+
+    def test_read_selection_is_independent_of_write_scope(self):
+        (self.repo / "package.json").write_text('{}')
+        git(self.repo, "add", "package.json")
+        w = self.worker()
+        first = w.read_context()
+        w.cfg = {**w.cfg, "allowed_paths": ["README.md"]}
+        self.assertEqual(w.read_context(), first)
+        self.assertEqual(first, {"package.json": "{}"})
+        self.assertIn("docs/readme.md", w.repository_manifest["tracked"])
+        self.assertNotIn("docs/readme.md", w.repository_manifest["copied"])
+        self.assertIn("Cargo.toml", w.repository_manifest["absent"])
+        (self.repo / "Cargo.toml").write_text("untracked but present")
+        w.read_context()
+        self.assertNotIn("Cargo.toml", w.repository_manifest["absent"])
+
+    def test_manifest_missing_copied_file_is_infrastructure_failure(self):
+        w = self.worker()
+        with patch.object(w, "run") as run:
+            with self.assertRaisesRegex(gateway.VerificationFailure, "manifest context"):
+                gateway.Gateway.verify(w, {
+                    "source_files": {"README.md": "instructions"},
+                    "repository_manifest": {
+                        "tracked": ["README.md", "laplogos_core/Cargo.toml"],
+                        "copied": ["README.md", "laplogos_core/Cargo.toml"],
+                        "absent": ["Cargo.toml"],
+                    },
+                })
+            run.assert_not_called()
+
     def test_plan_repair_feedback_bound_and_fresh_verifiers(self):
         for limit, failures in ((0, 1), (2, 2), (2, 3)):
             with self.subTest(limit=limit, failures=failures):
@@ -657,7 +740,10 @@ class GatewayTests(unittest.TestCase):
         w = self.worker()
         for name in (".env", ".env.local", ".envrc", ".git/config", ".ssh/id_rsa",
                      ".aws/credentials", "credentials.json", "secrets/data.json", "server.key",
-                     "../README.md", "/tmp/README.md", ".npmrc"):
+                     "../README.md", "/tmp/README.md", ".npmrc",
+                     "node_modules/demo/package.json", "target/Cargo.toml",
+                     "build/package.json", "dist/package.json", "cache/package.json",
+                     "generated/package.json", "vendor/package.json", "scripts/demo.wasm"):
             with self.subTest(name=name):
                 with patch.object(w, "run", return_value=name + "\x00"):
                     w.cfg = {**self.cfg, "read_context_paths": ["*"]}

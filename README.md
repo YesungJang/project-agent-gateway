@@ -55,11 +55,13 @@ GitHub 認証、Claude/Codex 認証、必要なラベル・CI、既定では bra
 
 ## 読み取り文脈と Plan Gate
 
-`allowed_paths` は編集許可だけを表す。`read_context_paths` は信頼済み管理者が指定する読み取り用パターンで、編集許可を追加しない。Git 管理下の対象ファイルと編集許可済みファイルの完全な本文を Claude に渡し、Codex の一時 workspace に同じ相対パスでコピーする。コピーは mode 0444、Codex 自体も `--sandbox read-only` で毎回新規起動する。元リポジトリへの書き込み権限は与えない。
+`allowed_paths` は編集許可だけを表す。`read_context_paths` は信頼済み管理者が指定する読み取り用パターンで、編集許可を追加しない。Git 管理下から読み取りパターンで選択したファイルの完全な本文を Claude に渡し、Codex の一時 workspace に同じ相対パスでコピーする。コピーは mode 0444、Codex 自体も `--sandbox read-only` で毎回新規起動する。元リポジトリへの書き込み権限は与えない。
 
-省略時の読み取り対象は `README.md`, `package.json`, `Cargo.toml`, `*config.*`, `scripts/*`, `prepare-wasm.mjs`, `Makefile`, `justfile`, `pyproject.toml`, `mise.toml`。設定例はこれらの一部を明示している。追加のスクリプトや設定が必要なら信頼済み設定にパスを追加する。Issue や計画に書かれたパスによる自動拡張はしない。例えば `allowed_paths=["README.md"]` でも manifest とビルド設定は読めるが、適用・差分・PR の各編集ゲートでは README.md 以外を許可しない。
+既定の読み取り対象は `README.md`, `package.json`, `Cargo.toml`, `*config.*`, `scripts/*`, `prepare-wasm.mjs`, `Makefile`, `justfile`, `pyproject.toml`, `mise.toml`。これらを各ディレクトリ階層で照合するため、nested `package.json` / `Cargo.toml` も収集する。`read_context_paths` は既定対象への追加であり、`allowed_paths` は収集対象の選択に使わない。追加のスクリプトや設定が必要なら信頼済み設定にパスを追加する。Issue や計画に書かれたパスによる自動拡張はしない。例えば `allowed_paths=["README.md"]` でも manifest とビルド設定は読めるが、適用・差分・PR の各編集ゲートでは README.md 以外を許可しない。
 
-`.env*`, `.git`, `.ssh`, `.aws`、既知の認証設定、secret/credential/password/token/private-key 名、鍵ファイルはコピー対象から除外する。シンボリックリンク、選択済みファイルの欠落・読み取り不能・サイズ超過は文脈エラーで停止する（1ファイル100KB、総量2MB）。文脈は黙って切り詰めない。ファイル名による除外は任意のソース内に埋め込まれた秘密の検出ではないため、読み取り対象は管理者が確認する。CLI sandbox 自体の読み取り隔離に関する上記の制約は変わらない。
+`repository_manifest` を計画生成・Plan Gate・実装後検証に渡す。安全な Git 管理パス (`tracked`)、本文提供済みパス (`copied`)、リテラルの読み取り候補について実ファイルの不存在を確認したパス (`absent`) を区別する。たとえば root `Cargo.toml` が存在しなければ `absent` に入り、基盤エラーにはしない。未提供・除外パスを不存在とは推測しない。選択済みの Git 管理ファイルが欠落した場合は引き続き基盤エラーにする。
+
+`.env*`, `.git`, `.ssh`, `.aws`、既知の認証設定、secret/credential/password/token/private-key 名、鍵ファイル、`node_modules` / `target` / `build` / `dist` / cache / generated / vendor / 仮想環境などの依存・生成ディレクトリ、既知のバイナリ拡張子は manifest とコピー対象から除外する。NUL を含む内容もコピーしない。シンボリックリンク、選択済みファイルの欠落・読み取り不能・サイズ超過は文脈エラーで停止する（1ファイル100KB、総量2MB）。文脈は黙って切り詰めない。ファイル名による除外は任意のソース内に埋め込まれた秘密の検出ではないため、読み取り対象は管理者が確認する。CLI sandbox 自体の読み取り隔離に関する上記の制約は変わらない。
 
 Plan Gate の状態遷移:
 
