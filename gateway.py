@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote, unquote
 
 
 class ApprovalRequired(RuntimeError):
@@ -276,6 +277,20 @@ def validate_config(cfg):
         raise TypeError("require_branch_protection must be a boolean")
     if not cfg.get("required_checks"):
         raise ValueError("At least one required CI check must be configured")
+    if not isinstance(cfg["required_checks"], list):
+        raise TypeError("required_checks must be a list of canonical identifiers")
+    for identifier in cfg["required_checks"]:
+        if not isinstance(identifier, str):
+            raise TypeError("required_checks identifiers must be strings")
+        kind, _, value = identifier.partition(":")
+        parts = value.split("/")
+        if (
+            kind not in ("check-run", "status-context")
+            or len(parts) != (2 if kind == "check-run" else 1)
+            or not parts[-1]
+            or any(quote(unquote(p), safe="") != p for p in parts)
+        ):
+            raise ValueError(f"Noncanonical required check {identifier!r}; see README")
     if not 1 <= cfg.get("timeout_seconds", 600) <= 3600:
         raise ValueError("Timeout must be 1..3600 seconds")
     if not 0 <= cfg.get("repair_attempts", 2) <= 5:
@@ -291,6 +306,92 @@ def validate_config(cfg):
     for path in paths:
         check_context_path(path)
     return cfg
+
+
+def required_check_gate(checks, required):
+    """All observed duplicates must pass; failures take precedence over pending."""
+    if checks is None:
+        checks = []
+    if not isinstance(checks, list):
+        raise ApprovalRequired("Malformed statusCheckRollup: expected a list")
+    seen, contexts = set(), set()
+    failures, pending = [], []
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise ApprovalRequired(f"Malformed CI check at rollup[{index}]: {check!r}")
+        kind = check.get("__typename")
+        name = check.get("name" if kind == "CheckRun" else "context")
+        workflow = check.get("workflowName", "")
+        observed = (
+            f"rollup[{index}] status={check.get('status')!r} "
+            f"conclusion={check.get('conclusion')!r} state={check.get('state')!r}"
+        )
+        if (
+            kind not in ("CheckRun", "StatusContext")
+            or not isinstance(name, str)
+            or not name
+            or (kind == "CheckRun" and not isinstance(workflow, str))
+        ):
+            raise ApprovalRequired(f"Malformed CI identity {check!r}; {observed}")
+        identifier = (
+            f"check-run:{quote(workflow, safe='')}/{quote(name, safe='')}"
+            if kind == "CheckRun"
+            else f"status-context:{quote(name, safe='')}"
+        )
+        detail = f"{identifier} ({observed})"
+        if kind == "CheckRun":
+            status, conclusion = check.get("status"), check.get("conclusion")
+            if status in ("QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING"):
+                if conclusion not in (None, ""):
+                    failures.append(f"Malformed CI: {detail}")
+                    continue
+                result = "pending"
+            elif status == "COMPLETED" and conclusion in (
+                "SUCCESS",
+                "FAILURE",
+                "CANCELLED",
+                "TIMED_OUT",
+                "ACTION_REQUIRED",
+                "STARTUP_FAILURE",
+                "SKIPPED",
+                "NEUTRAL",
+                "STALE",
+            ):
+                result = "success" if conclusion == "SUCCESS" else "failure"
+            else:
+                failures.append(f"Unknown/malformed CI: {detail}")
+                continue
+        else:
+            state = check.get("state")
+            if state not in ("SUCCESS", "PENDING", "EXPECTED", "ERROR", "FAILURE"):
+                failures.append(f"Unknown/malformed CI: {detail}")
+                continue
+            result = (
+                "success"
+                if state == "SUCCESS"
+                else "pending"
+                if state in ("PENDING", "EXPECTED")
+                else "failure"
+            )
+        seen.add(identifier)
+        if identifier not in required:
+            continue
+        contexts.add(name)  # GitHub protection uses raw job/context names, not our IDs.
+        if result == "failure":
+            failures.append(f"Required CI not successful: {detail}")
+        elif result == "pending":
+            pending.append(detail)
+    if failures:
+        raise ApprovalRequired("; ".join(sorted(failures)))
+    missing = set(required) - seen
+    if missing:
+        pending.append(
+            f"Missing required CI: {', '.join(sorted(missing))}; "
+            f"observed identifiers: {', '.join(sorted(seen)) or '(none)'}"
+        )
+    if pending:
+        raise GatePending("Waiting for CI: " + "; ".join(sorted(pending)))
+    return contexts
 
 
 class Gateway:
@@ -617,17 +718,9 @@ class Gateway:
                 "PR head/base/protection/mergeability changed or pending"
             )
         check_paths([f["path"] for f in data["files"]], self.cfg)
-        checks = data["statusCheckRollup"] or []
-        success = {"SUCCESS", "success"}
-        pending = {None, "PENDING", "pending", "EXPECTED", "expected"}
-        statuses = [c.get("conclusion", c.get("state")) for c in checks]
-        if any(status not in success | pending for status in statuses):
-            raise ApprovalRequired("CI failed or skipped")
-        if not checks or any(status in pending for status in statuses):
-            raise GatePending("Waiting for CI")
-        names = {c.get("name", c.get("context")) for c in checks}
-        if not set(self.cfg["required_checks"]) <= names:
-            raise GatePending("Waiting for required CI checks")
+        protection_contexts = required_check_gate(
+            data["statusCheckRollup"], self.cfg["required_checks"]
+        )
         if data["mergeable"] == "UNKNOWN" or data["mergeStateStatus"] == "UNKNOWN":
             raise GatePending("Waiting for GitHub mergeability")
         if data["mergeable"] != "MERGEABLE" or data["mergeStateStatus"] != "CLEAN":
@@ -652,7 +745,7 @@ class Gateway:
         if (
             not protection.get("enforce_admins", {}).get("enabled")
             or not required.get("strict")
-            or not set(self.cfg["required_checks"]) <= contexts
+            or not protection_contexts <= contexts
         ):
             raise ApprovalRequired(
                 "Strict branch protection with enforced checks required"
@@ -667,7 +760,9 @@ class Gateway:
             except GatePending as exc:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ApprovalRequired("CI/mergeability wait timed out") from exc
+                    raise ApprovalRequired(
+                        f"CI/mergeability wait timed out: {exc}"
+                    ) from exc
                 time.sleep(min(5, remaining))
 
     def plan_gate(self, context, mode):

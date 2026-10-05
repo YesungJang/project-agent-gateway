@@ -51,8 +51,8 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - 依存/lock、migration/SQL、CI/隠しパス、infra/Terraform/AWS、auth/permission/secret/security/config/gateway、指示書、シェルスクリプトは承認へ昇格する。意味上の認証・権限変更を完全に判定することはできないため、リポジトリ管理者が protected_paths を追加する。
 - Git hooks は Gateway の Git 操作で無効。GitHub は設定の origin と一致する必要がある。各タスクを1コミットにする。
 - タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
-- 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、全 CI 成功、必須 CI、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
-- CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
+- 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、必須 CI 成功、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
+- 必須 CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
 - PR は計画・検証コマンド・head/base・実行結果の監査記録。Issue を自動 close する参照形式は使わず、マージ確認後のみ close。
 - state は mode 0700 推奨。ログは umask 077 で作成し、エージェント出力を含む。PR に載る情報を確認し、機密 Issue を投入しない。
 - crash や停止後は state に残る Issue を自動再実行しない。人が worktree、PR、state を調査する。worktree/ログは削除せず保持する。
@@ -65,7 +65,48 @@ NORMAL がデフォルト。FAST は独立検証を省略し PR まで（自動�
 
 `false` は branch-protection API の呼び出しと保護設定の必須判定だけを省略する。この API にアクセスできず 403 となるリポジトリでも利用できる。`true` では 403 を含む API エラーで停止し、他の GitHub API エラーは設定にかかわらず停止する。API エラーを一括で無視する処理はない。
 
-両設定とも、全タスクの検証・全体検証、allowed_paths / protected_paths / 危険変更の判定、検証後の HEAD と作業ツリー、PR head/base の一致、全 CI 成功、configured required_checks、MERGEABLE/CLEAN が必要。失敗・スキップ・キャンセル・タイムアウト・不明な CI はマージしない。pending・不足 CI・未確定の mergeability は既存の待機期限後に approval-required となる。FAST モードでは引き続き自動マージしない。
+両設定とも、全タスクの検証・全体検証、allowed_paths / protected_paths / 危険変更の判定、検証後の HEAD と作業ツリー、PR head/base の一致、configured required_checks の全成功、MERGEABLE/CLEAN が必要。必須 CI の失敗・スキップ・neutral・キャンセル・タイムアウト、および不明・不正な CI データではマージしない。pending・不足 CI・未確定の mergeability は既存の待機期限後に approval-required となる。FAST モードでは引き続き自動マージしない。
+
+## Required checks の識別子と状態判定
+
+`required_checks` は PR の `gh pr view <PR> --json statusCheckRollup` に実在するフィールドから指定する。表示ラベルやイベントの接尾辞を推測しない。形式は以下のとおり（大文字・小文字を区別）:
+
+- CheckRun: `check-run:<workflowName>/<name>`。workflowName が空または存在しない場合だけ `check-run:/<name>`。workflowName が存在する run を名前だけで照合する fallback はない。
+- StatusContext: `status-context:<context>`。
+- 各要素は UTF-8 の percent-encoding（Python `urllib.parse.quote(value, safe="")`）。英数字と `-._~` はそのまま、空白は `%20`、`/` は `%2F`、`%` は `%25`。区切りの `/` と各要素内の `/` を区別する。例: workflowName=`CI/main`, name=`unit tests` → `check-run:CI%2Fmain/unit%20tests`。
+- 旧形式の単独 job 名や `CI/core (pull_request)` は設定読み込み時に拒否する。設定例の CI/test・CI/lint も対象 PR の実際の値に置き換える。
+
+PR #11 で報告されたデータに対する移行後の設定:
+
+```json
+"required_checks": [
+  "check-run:CI/core",
+  "check-run:ci-medium/node-tests",
+  "check-run:ci-fast/rust-tests",
+  "check-run:CI/web"
+]
+```
+
+`~/.config/agent-gateway/laplogos.json` が旧形式なら次回 E2E 前に上記へ移行する必要がある。Gateway は設定の自動書き換えを行わない。
+
+| 必須チェックの観測値 | 判定 |
+| --- | --- |
+| 未出現（rollup が null/空も含む） | GatePending |
+| CheckRun: QUEUED / IN_PROGRESS / PENDING / REQUESTED / WAITING、conclusion が欠落・null・空文字 | GatePending |
+| CheckRun: COMPLETED / SUCCESS | 成功 |
+| CheckRun: COMPLETED / FAILURE / CANCELLED / TIMED_OUT / ACTION_REQUIRED / STARTUP_FAILURE / SKIPPED / NEUTRAL / STALE | ApprovalRequired（conclusion が SUCCESS 以外） |
+| StatusContext: SUCCESS | 成功 |
+| StatusContext: PENDING / EXPECTED | GatePending |
+| StatusContext: FAILURE / ERROR | ApprovalRequired |
+| 未知の型・状態、壊れた識別子、COMPLETED の conclusion 欠落、未完了なのに conclusion が確定 | ApprovalRequired |
+
+同じ識別子の重複は rollup 内の全件を評価する。一件でも失敗なら停止し、一件でも未完了なら待機する。失敗は未完了・不足より優先する。時刻順の選別や一件の成功による上書きはしない。イベントはこの JSON から識別できないため、push/pull_request の実行を推測して除外しない。
+
+設定で必須ではない、既知の正しい状態のチェックは CI 判定を妨げない（SKIPPED/NEUTRAL を含む）。不正・未知のデータは必須かどうかにかかわらず停止する。GitHub の MERGEABLE/CLEAN と既存の保護判定は引き続き必要。保護 API の contexts/checks には独自識別子ではなく、一致した実データの CheckRun.name または StatusContext.context が含まれることを要求し、strict・enforce_admins の検査も維持する。
+
+GatePending は `ci_wait_seconds` まで最大5秒間隔で再取得し、期限切れだけ ApprovalRequired へ昇格する。失敗・待機理由には識別子、rollup の添字、status/conclusion/state を含め、期限切れにも最後の理由を残す。不足時は不足識別子と観測済み識別子を表示する。
+
+根拠: [GitHub CheckRun の状態定義](https://docs.github.com/en/enterprise-cloud%40latest/graphql/reference/checks)、[StatusContext の状態定義](https://docs.github.com/en/graphql/reference/commits)、[gh の statusCheckRollup JSON 出力実装](https://github.com/cli/cli/blob/trunk/api/export_pr.go)。CheckRun の status と conclusion は別のフィールドであり、gh は workflowName/name を返すが `(pull_request)` 付きの識別子は返さない。
 
 ## 現時点の制約
 

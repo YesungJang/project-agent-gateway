@@ -16,7 +16,7 @@ def config(repo):
         "allowed_paths": ["src/*.py", "tests/*.py", "docs/*.md"],
         "validation": {"unit": ["python3", "-c", "assert True"]},
         "full_validation": ["unit"],
-        "required_checks": ["unit"],
+        "required_checks": ["check-run:CI/unit"],
         "repair_attempts": 1,
     }
 
@@ -309,6 +309,35 @@ class GatewayTests(unittest.TestCase):
                     self.cfg["require_branch_protection"] = required
                 self.check_merge_gate_fail_closed()
 
+    def test_required_check_config_is_canonical(self):
+        for checks in (
+            "check-run:CI/unit",
+            [None],
+            [123],
+            ["unit"],
+            ["CI/core (pull_request)"],
+            ["check-run:CI/"],
+            ["check-run:CI/a/b"],
+            ["status-context:"],
+            ["check-run:CI/a b"],
+            ["check-run:CI/a%2fb"],
+            ["status-context:%GG"],
+            ["status-context:%FF"],
+        ):
+            with self.subTest(checks=checks), self.assertRaises((ValueError, TypeError)):
+                gateway.validate_config({**self.cfg, "required_checks": checks})
+        gateway.validate_config(
+            {
+                **self.cfg,
+                "required_checks": [
+                    "check-run:CI/unit",
+                    "check-run:/unit",
+                    "check-run:CI%2Fx/a%20b",
+                    "status-context:external%2Ftest",
+                ],
+            }
+        )
+
     def check_merge_gate_fail_closed(self):
         w = self.worker()
         good = {
@@ -320,7 +349,15 @@ class GatewayTests(unittest.TestCase):
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
             "files": [{"path": "src/greeting.py"}],
-            "statusCheckRollup": [{"name": "unit", "conclusion": "SUCCESS"}],
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "workflowName": "CI",
+                    "status": "COMPLETED",
+                    "name": "unit",
+                    "conclusion": "SUCCESS",
+                }
+            ],
         }
         w.cfg["protected_paths"] = ["src/payments.py"]
         protection = {
@@ -342,13 +379,46 @@ class GatewayTests(unittest.TestCase):
             ("mergeStateStatus", "BEHIND"),
             ("mergeStateStatus", "BLOCKED"),
             ("statusCheckRollup", []),
-            ("statusCheckRollup", [{"name": "unit", "conclusion": "SKIPPED"}]),
-            ("statusCheckRollup", [{"name": "unit", "conclusion": None}]),
+            (
+                "statusCheckRollup",
+                [
+                    {
+                        "__typename": "CheckRun",
+                        "workflowName": "CI",
+                        "status": "COMPLETED",
+                        "name": "unit",
+                        "conclusion": "SKIPPED",
+                    }
+                ],
+            ),
+            (
+                "statusCheckRollup",
+                [
+                    {
+                        "__typename": "CheckRun",
+                        "workflowName": "CI",
+                        "status": "COMPLETED",
+                        "name": "unit",
+                        "conclusion": None,
+                    }
+                ],
+            ),
             ("files", [{"path": "src/auth.py"}]),
             ("files", [{"path": "outside/file.py"}]),
             ("files", [{"path": "src/payments.py"}]),
             *[
-                ("statusCheckRollup", [{"name": "unit", "conclusion": status}])
+                (
+                    "statusCheckRollup",
+                    [
+                        {
+                            "__typename": "CheckRun",
+                            "workflowName": "CI",
+                            "status": "COMPLETED",
+                            "name": "unit",
+                            "conclusion": status,
+                        }
+                    ],
+                )
                 for status in (
                     "FAILURE",
                     "CANCELLED",
@@ -357,12 +427,35 @@ class GatewayTests(unittest.TestCase):
                     "NEUTRAL",
                 )
             ],
-            ("statusCheckRollup", [{"name": "other", "conclusion": "SUCCESS"}]),
             (
                 "statusCheckRollup",
                 [
-                    {"name": "unit", "conclusion": "SUCCESS"},
-                    {"name": "unit", "conclusion": "FAILURE"},
+                    {
+                        "__typename": "CheckRun",
+                        "workflowName": "CI",
+                        "status": "COMPLETED",
+                        "name": "other",
+                        "conclusion": "SUCCESS",
+                    }
+                ],
+            ),
+            (
+                "statusCheckRollup",
+                [
+                    {
+                        "__typename": "CheckRun",
+                        "workflowName": "CI",
+                        "status": "COMPLETED",
+                        "name": "unit",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "workflowName": "CI",
+                        "status": "COMPLETED",
+                        "name": "unit",
+                        "conclusion": "FAILURE",
+                    },
                 ],
             ),
         ]:
@@ -392,7 +485,15 @@ class GatewayTests(unittest.TestCase):
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
             "files": [{"path": "src/greeting.py"}],
-            "statusCheckRollup": [{"name": "unit", "conclusion": "SUCCESS"}],
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "workflowName": "CI",
+                    "status": "COMPLETED",
+                    "name": "unit",
+                    "conclusion": "SUCCESS",
+                }
+            ],
         }
         for required in (None, True, False):
             if required is not None:
@@ -495,6 +596,9 @@ class GatewayTests(unittest.TestCase):
                         "files": [{"path": "src/greeting.py"}],
                         "statusCheckRollup": [
                             {
+                                "__typename": "CheckRun",
+                                "workflowName": "CI",
+                                "status": "COMPLETED",
                                 "name": "unit",
                                 "conclusion": "FAILURE" if blocked else "SUCCESS",
                             }

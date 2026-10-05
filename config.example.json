@@ -14,7 +14,7 @@
   },
   "full_validation": ["unit", "lint"],
   "require_branch_protection": true,
-  "required_checks": ["test", "lint"],
+  "required_checks": ["check-run:CI/test", "check-run:CI/lint"],
   "timeout_seconds": 600,
   "ci_wait_seconds": 300,
   "repair_attempts": 2
