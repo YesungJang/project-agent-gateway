@@ -99,6 +99,35 @@ context, not evidence of absence. Excluded/unlisted paths have unknown status.
 Return the requested JSON.
 """
 
+VERIFICATION_CONTRACTS = {
+    "PLAN": """PLAN verification occurs BEFORE implementation. Verify ONLY whether the
+proposed plan is executable, scoped, safe, and satisfies the Issue against trusted
+repository context. For a requirements critique without a plan, evaluate requirements
+and feasibility only. Acceptance criteria describe future outcomes, not completed work.
+Check referenced paths, command plausibility against manifests/config, task ordering
+and dependencies, write scope against allowed_paths, and prohibited/risky operations.
+MUST NOT require post-change README/content, implementation diff, test execution results,
+modified worktree, git diff/status evidence, or implementation artifacts that can only
+exist after execution. Their absence is neither FAIL nor ERROR during PLAN.
+Invalid commands, paths, task ordering, or write scope => FAIL with actionable reasons.
+An explicitly absent root Cargo.toml is valid repository knowledge. A proposed root
+cargo command requiring that manifest => FAIL, not ERROR; explain how the plan can use
+the actual supplied repository structure. Never execute planned commands.
+ERROR is reserved for actually missing required trusted context or infrastructure failure.
+Do not require .github/workflows contents unless the plan specifically depends on
+inspecting/modifying CI or the Issue requires CI knowledge. required_checks is trusted
+deterministic Gateway configuration; its presence does not require workflow inspection.
+""",
+    "TASK": """TASK verification occurs AFTER edits and configured task validation.
+Verify the task's acceptance criteria using post-change sources, diff, and task-specific validation evidence.
+These may be required here: missing necessary evidence => ERROR; evidence of unmet
+criteria or incorrect implementation => FAIL with actionable reasons.
+test_results records successful Gateway execution of configured validation commands,
+not merely proposed tests. Do not run commands or require a Git checkout in this isolated
+workspace; use the supplied evidence. Remain fresh and read-only.
+""",
+}
+
 
 def safe_path(name):
     p = PurePosixPath(name)
@@ -406,6 +435,9 @@ class Gateway:
         return result
 
     def _verify(self, payload):
+        phase = payload.get("verification_phase")
+        if not isinstance(phase, str) or phase not in VERIFICATION_CONTRACTS:
+            raise VerificationFailure("Missing/invalid verification_phase")
         with tempfile.TemporaryDirectory(dir=self.state) as d:
             schema = Path(d) / "schema.json"
             output = Path(d) / "verdict.json"
@@ -448,7 +480,8 @@ class Gateway:
                     "-",
                 ],
                 POLICY
-                + "\nVerify only supplied acceptance criteria. Do not modify files. "
+                + "\n" + VERIFICATION_CONTRACTS[phase]
+                + "\nDo not modify files. "
                 "source_files contains complete sources also present relative to cwd. "
                 "Do not inspect paths outside this workspace. "
                 "Return ERROR if needed context is missing, unreadable, incomplete, or "
@@ -600,7 +633,14 @@ class Gateway:
         plan = None
         for attempt in range(self.cfg.get("plan_repair_attempts", 2) + 1):
             plan = self.claude(
-                {**context, "stage": "plan sequential tasks covering all requirements",
+                {**context, "stage": (
+                    "Plan sequential tasks covering all requirements. For a trivial "
+                    "documentation/config-only issue, prefer 1 task. For a small localized "
+                    "change, prefer 1-3 tasks. Only decompose further when dependencies "
+                    "genuinely require it; explain those dependencies in the task criteria. "
+                    "Keep inspection, edits, and validation together for a single outcome; "
+                    "do not make each checklist item a separate task."
+                 ),
                  "previous_plan": plan, "feedback": feedback}, PLAN_SCHEMA,
             )
             tasks = plan.get("tasks")
@@ -620,7 +660,7 @@ class Gateway:
                 return plan
             else:
                 try:
-                    verdict = self.verify({**context, "plan": plan})
+                    verdict = self.verify({**context, "plan": plan, "verification_phase": "PLAN"})
                     if verdict["verdict"] == "ERROR":
                         raise VerificationFailure("Verifier context/infrastructure failure: " + "; ".join(verdict["reasons"]))
                 except VerificationFailure as exc:
@@ -669,11 +709,13 @@ class Gateway:
                 "issue": {"title": issue["title"], "body": issue["body"]},
                 "allowed_paths": self.cfg["allowed_paths"],
                 "test_names": list(self.cfg["validation"]),
+                "validation_commands": self.cfg["validation"],
+                "required_checks": self.cfg["required_checks"],
             }
             mode = self.cfg.get("mode", "NORMAL")
             if mode == "DEBATE":
                 context["independent_critique"] = self.verify(
-                    {**context, "stage": "requirements critique"}
+                    {**context, "stage": "requirements critique", "verification_phase": "PLAN"}
                 )
             plan = self.plan_gate(context, mode)
             tasks = plan["tasks"]
@@ -714,6 +756,7 @@ class Gateway:
                             if mode == "FAST"
                             else self.verify(
                                 {
+                                    "verification_phase": "TASK",
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,
@@ -724,6 +767,11 @@ class Gateway:
                                         "ls-files", "--others", "--exclude-standard"
                                     ),
                                     "tests": task["tests"],
+                                    "test_results": [
+                                        {"name": name, "argv": self.cfg["validation"][name],
+                                         "status": "PASS"}
+                                        for name in task["tests"]
+                                    ],
                                 }
                             )
                         )

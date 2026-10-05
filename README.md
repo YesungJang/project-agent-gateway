@@ -55,6 +55,16 @@ GitHub 認証、Claude/Codex 認証、必要なラベル・CI、既定では bra
 
 ## 読み取り文脈と Plan Gate
 
+verifier payload の `verification_phase` は必須で、`PLAN` と `TASK` を明示する。
+
+- `PLAN`（DEBATE の事前要件批評も含む）: 信頼済み文脈に照らして計画の実行可能性、Issue 要件、パス・コマンド、依存順序、書き込み範囲、安全性だけを検証する。変更後 README、実装 diff、テスト実行結果、変更済み worktree、git diff/status、実装後成果物を要求しない。不正なコマンド・パス・順序・範囲は具体的な修正理由付き `FAIL`。本当に必要な信頼済み文脈の欠落や検証基盤障害は `ERROR`。
+- root `Cargo.toml` の明示的な不存在は有効な知識。その存在を前提とする root の cargo コマンドは `FAIL` とし、実際の構成に基づく修正を Claude に返す。既存の回数上限内で再計画し、毎回 fresh/read-only の Codex で再検証する。
+- `PLAN` では計画が CI の調査・変更に依存するか、Issue が CI 知識を要求する場合以外、`.github/workflows` の本文は要求しない。`required_checks` と検証コマンドは信頼済み Gateway 設定として渡す。読み取り文脈の選択範囲は広げない。
+- `TASK`: 編集後のソース・diff・タスク固有の検証証拠で達成条件を検証する。Gateway が実際に成功を確認したコマンドを `test_results` に渡す。必要な証拠不足は `ERROR`、証拠に基づく未達成は `FAIL`。引き続き fresh/read-only とする。
+- FINAL/MERGE はこの verifier を共有せず、既存の決定論的な全体検証・CI・マージゲートを維持する。
+
+計画生成は、軽微な文書・設定のみの Issue は1タスク、小規模な局所変更は1〜3タスクを推奨する。さらに分割するのは依存関係が実際に必要な場合だけとし、その理由を達成条件に記す。調査・編集・検証をチェック項目ごとの別タスクにせず、1つの成果にまとめる。既存の最大12タスクと再計画回数上限は維持する。
+
 `allowed_paths` は編集許可だけを表す。`read_context_paths` は信頼済み管理者が指定する読み取り用パターンで、編集許可を追加しない。Git 管理下から読み取りパターンで選択したファイルの完全な本文を Claude に渡し、Codex の一時 workspace に同じ相対パスでコピーする。コピーは mode 0444、Codex 自体も `--sandbox read-only` で毎回新規起動する。元リポジトリへの書き込み権限は与えない。
 
 既定の読み取り対象は `README.md`, `package.json`, `Cargo.toml`, `*config.*`, `scripts/*`, `prepare-wasm.mjs`, `Makefile`, `justfile`, `pyproject.toml`, `mise.toml`。これらを各ディレクトリ階層で照合するため、nested `package.json` / `Cargo.toml` も収集する。`read_context_paths` は既定対象への追加であり、`allowed_paths` は収集対象の選択に使わない。追加のスクリプトや設定が必要なら信頼済み設定にパスを追加する。Issue や計画に書かれたパスによる自動拡張はしない。例えば `allowed_paths=["README.md"]` でも manifest とビルド設定は読めるが、適用・差分・PR の各編集ゲートでは README.md 以外を許可しない。

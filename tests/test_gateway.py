@@ -74,9 +74,14 @@ class LocalGateway(gateway.Gateway):
 
     def verify(self, payload):
         self.verifications += 1
+        assert payload["verification_phase"] == ("TASK" if "task" in payload else "PLAN")
         if "plan" in payload and self.fail_plan:
             return {"verdict": "FAIL", "reasons": ["Missing criterion"]}
         if "diff" in payload:
+            assert payload["test_results"] == [
+                {"name": name, "argv": self.cfg["validation"][name], "status": "PASS"}
+                for name in payload["tests"]
+            ]
             assert "def greet" in payload["diff"], (
                 "New file must appear in verified diff"
             )
@@ -531,13 +536,13 @@ class GatewayTests(unittest.TestCase):
             return ""
 
         w.run = run
-        self.assertEqual(gateway.Gateway.verify(w, {"task": "safe"})["verdict"], "PASS")
+        self.assertEqual(gateway.Gateway.verify(w, {"verification_phase": "TASK", "task": "safe"})["verdict"], "PASS")
         self.assertIn("read-only", captured[0])
         self.assertNotIn("--approve-for-me", captured[0])
         self.assertNotIn("--resume", captured[0])
         verdict["risky"] = True
         with self.assertRaisesRegex(gateway.ApprovalRequired, "risk"):
-            gateway.Gateway.verify(w, {"task": "risky"})
+            gateway.Gateway.verify(w, {"verification_phase": "TASK", "task": "risky"})
 
     def test_plan_context_workspace_read_scope_is_not_write_scope(self):
         self.cfg["allowed_paths"] = ["README.md"]
@@ -664,6 +669,7 @@ class GatewayTests(unittest.TestCase):
         with patch.object(w, "run") as run:
             with self.assertRaisesRegex(gateway.VerificationFailure, "manifest context"):
                 gateway.Gateway.verify(w, {
+                    "verification_phase": "PLAN",
                     "source_files": {"README.md": "instructions"},
                     "repository_manifest": {
                         "tracked": ["README.md", "laplogos_core/Cargo.toml"],
@@ -672,6 +678,94 @@ class GatewayTests(unittest.TestCase):
                     },
                 })
             run.assert_not_called()
+
+    def test_phase_contract_and_invalid_root_command_replanning(self):
+        w = self.worker()
+        w.job = 9
+        sources = {"README.md": "Old instructions", "core/Cargo.toml": '[package]\nname = "core"'}
+        context = {"source_files": sources, "repository_manifest": {
+            "tracked": sorted(sources), "copied": sorted(sources), "absent": ["Cargo.toml"]}}
+        feedback = "Root Cargo.toml is absent; use cargo test --manifest-path core/Cargo.toml."
+        plans, workspaces = [], []
+
+        def claude(payload, schema):
+            plans.append(payload)
+            self.assertIn("prefer 1 task", payload["stage"])
+            self.assertIn("prefer 1-3 tasks", payload["stage"])
+            command = "cargo test -p core" if len(plans) == 1 else "cargo test --manifest-path core/Cargo.toml"
+            return {"tasks": [{"title": "Update README", "criteria": [command], "tests": ["unit"]}]}
+
+        def run(argv, stdin=None, cwd=None):
+            prompt, raw = stdin.split("Give concrete reasons for FAIL/ERROR.\n", 1)
+            payload = json.loads(raw)
+            self.assertEqual(payload["verification_phase"], "PLAN")
+            self.assertIn("MUST NOT require", prompt)
+            for evidence in ("post-change README", "implementation diff", "test execution results",
+                             "modified worktree", "git diff/status", "implementation artifacts"):
+                self.assertIn(evidence, prompt)
+            self.assertIn("Invalid commands, paths, task ordering, or write scope => FAIL", prompt)
+            self.assertIn(".github/workflows", prompt)
+            self.assertNotIn("diff", payload)
+            self.assertNotIn("test_results", payload)
+            self.assertIn("--ephemeral", argv)
+            self.assertIn("read-only", argv)
+            self.assertNotIn("--resume", argv)
+            workspaces.append(cwd)
+            invalid = payload["plan"]["tasks"][0]["criteria"] == ["cargo test -p core"]
+            Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps({
+                "verdict": "FAIL" if invalid else "PASS", "risky": False,
+                "reasons": [feedback] if invalid else []}))
+            return ""
+
+        w.claude, w.run = claude, run
+        w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+        result = w.plan_gate(context, "NORMAL")
+        self.assertEqual(len(plans), 2)
+        self.assertEqual(plans[1]["feedback"], [feedback])
+        self.assertEqual(plans[1]["previous_plan"]["tasks"][0]["criteria"], ["cargo test -p core"])
+        self.assertIn("--manifest-path", result["tasks"][0]["criteria"][0])
+        self.assertEqual(len(set(workspaces)), 2)
+        self.assertEqual(w.job_data["plan_gate"], "PASS")
+
+    def test_task_contract_requires_post_change_evidence(self):
+        w = self.worker()
+
+        def run(argv, stdin=None, cwd=None):
+            self.assertIn("TASK verification", stdin)
+            self.assertIn("post-change sources, diff, and task-specific validation evidence", stdin)
+            Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps({
+                "verdict": "ERROR", "risky": False, "reasons": ["Missing task diff"]}))
+            return ""
+
+        w.run = run
+        with self.assertRaisesRegex(gateway.VerificationFailure, "Missing task diff"):
+            gateway.Gateway.verify(w, {"verification_phase": "TASK", "task": {}})
+
+    def test_verification_phase_is_required_and_closed(self):
+        w = self.worker()
+        for phase in (None, "FINAL", "unknown", []):
+            with self.subTest(phase=phase), patch.object(w, "run") as run:
+                payload = {} if phase is None else {"verification_phase": phase}
+                with self.assertRaisesRegex(gateway.VerificationFailure, "verification_phase"):
+                    gateway.Gateway.verify(w, payload)
+                run.assert_not_called()
+
+    def test_debate_critique_uses_preimplementation_contract(self):
+        self.cfg["mode"] = "DEBATE"
+        w = self.worker()
+        original = w.verify
+        payloads = []
+
+        def verify(payload):
+            payloads.append(payload)
+            return original(payload)
+
+        w.verify = verify
+        w.once()
+        self.assertEqual([p["verification_phase"] for p in payloads], ["PLAN", "PLAN", "TASK"])
+        self.assertEqual(payloads[0]["stage"], "requirements critique")
+        self.assertEqual(payloads[1]["required_checks"], self.cfg["required_checks"])
+        self.assertEqual(payloads[1]["validation_commands"], self.cfg["validation"])
 
     def test_plan_repair_feedback_bound_and_fresh_verifiers(self):
         for limit, failures in ((0, 1), (2, 2), (2, 3)):
@@ -749,7 +843,7 @@ class GatewayTests(unittest.TestCase):
                     w.cfg = {**self.cfg, "read_context_paths": ["*"]}
                     self.assertEqual(w.read_context(), {})
                 with self.assertRaises(gateway.VerificationFailure):
-                    gateway.Gateway.verify(w, {"source_files": {name: "never copied"}})
+                    gateway.Gateway.verify(w, {"verification_phase": "PLAN", "source_files": {name: "never copied"}})
         w.cfg = {**self.cfg, "read_context_paths": ["package.json"]}
         with patch.object(w, "run", return_value="package.json\x00"):
             with self.assertRaisesRegex(gateway.VerificationFailure, "Missing/unreadable"):
