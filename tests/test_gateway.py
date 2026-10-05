@@ -731,6 +731,8 @@ class GatewayTests(unittest.TestCase):
                 expected = "Updated build instructions" if name == "README.md" and len(seen) > 1 else content
                 self.assertEqual((workspace / name).read_text(), expected)
                 self.assertEqual((workspace / name).stat().st_mode & 0o222, 0)
+            if payload["verification_phase"] == "TASK":
+                self.assertEqual(payload["issue"], {"title": "Document build", "body": "Use package.json and Cargo.toml"})
             self.assertIn("read-only", argv)
             self.assertNotIn("--approve-for-me", argv)
             Path(argv[argv.index("--output-last-message") + 1]).write_text(
@@ -814,6 +816,7 @@ class GatewayTests(unittest.TestCase):
                 self.assertIn(evidence, prompt)
             self.assertIn("Invalid commands, paths, task ordering, or write scope => FAIL", prompt)
             self.assertIn(".github/workflows", prompt)
+            self.assertIn("Do not demand hidden reasoning or historical proof", prompt)
             self.assertNotIn("diff", payload)
             self.assertNotIn("test_results", payload)
             self.assertIn("--ephemeral", argv)
@@ -849,6 +852,96 @@ class GatewayTests(unittest.TestCase):
         w.run = run
         with self.assertRaisesRegex(gateway.VerificationFailure, "Missing task diff"):
             gateway.Gateway.verify(w, {"verification_phase": "TASK", "task": {}})
+
+    def test_task_outcome_contract_and_verdicts_without_action_history(self):
+        # Stub only the external model: assert its actual prompt/context contract
+        # and exercise real verdict handling. This is not a live model evaluation.
+        cases = (
+            ("correct", "build", True, False, None, "PASS", ""),
+            ("wrong command", "deploy", True, False, None, "FAIL", "Unknown npm script: deploy"),
+            ("missing context", "build", False, False, None, "ERROR", "Missing laplogos_web/package.json"),
+            ("audit present", "build", True, True, "Inspected package.json before editing", "PASS", ""),
+            ("audit absent", "build", True, True, None, "FAIL", "Required audit.md artifact is absent"),
+        )
+        for label, command, has_package, audit_required, audit, verdict, reason in cases:
+            with self.subTest(case=label):
+                w = self.worker()
+                sources = {"README.md": f"cd laplogos_web && npm run {command}"}
+                if has_package:
+                    sources["laplogos_web/package.json"] = '{"scripts":{"build":"vite build"}}'
+                if audit is not None:
+                    sources["audit.md"] = audit
+                issue = "Inspect package.json before editing; check repository structure and existing configuration. Document the build command."
+                if audit_required:
+                    issue += " Deliver audit.md recording pre-edit inspection."
+                payload = {
+                    "verification_phase": "TASK",
+                    "issue": {"title": "Document build", "body": issue},
+                    "task": {"criteria": [issue], "tests": ["unit"]},
+                    "source_files": sources,
+                    "repository_manifest": {
+                        "tracked": sorted(set(sources) | {"laplogos_web/package.json"}),
+                        "copied": sorted(sources),
+                        "absent": ["Cargo.toml"] + (["audit.md"] if audit is None else []),
+                    },
+                    "diff": f"+cd laplogos_web && npm run {command}",
+                    "test_results": [{"name": "unit", "argv": ["true"], "status": "PASS"}],
+                }
+
+                def run(argv, stdin=None, cwd=None):
+                    prompt, raw = stdin.split("Give concrete reasons for FAIL/ERROR.\n", 1)
+                    self.assertIn("Verify observable outcomes", prompt)
+                    self.assertIn("implementation instructions, not audit requirements", prompt)
+                    self.assertIn("MUST NOT require chronological agent-action evidence", prompt)
+                    self.assertIn("read a file before editing", prompt)
+                    self.assertIn("executed exploratory commands", prompt)
+                    self.assertIn("hidden reasoning", prompt)
+                    self.assertIn("explicitly requires an audit/log artifact", prompt)
+                    self.assertIn("confirmed absent required artifact => FAIL", prompt)
+                    self.assertIn("correct observable result => PASS", prompt)
+                    self.assertIn("observable mismatch => FAIL", prompt)
+                    self.assertIn("genuinely missing required trusted context => ERROR", prompt)
+                    self.assertEqual(json.loads(raw), payload)
+                    for name, content in sources.items():
+                        self.assertEqual((Path(cwd) / name).read_text(), content)
+                    # Deterministic model substitute compares the supplied artifacts;
+                    # it receives no transcript or chronological action records.
+                    package = Path(cwd) / "laplogos_web/package.json"
+                    if not package.exists():
+                        observed = "ERROR"
+                    elif (Path(cwd) / "README.md").read_text().split()[-1] not in json.loads(package.read_text())["scripts"]:
+                        observed = "FAIL"
+                    elif "Deliver audit.md" in json.loads(raw)["issue"]["body"] and not (Path(cwd) / "audit.md").exists():
+                        observed = "FAIL"
+                    else:
+                        observed = "PASS"
+                    Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps({
+                        "verdict": observed, "reasons": [reason] if reason else [], "risky": False}))
+                    return ""
+
+                w.run = run
+                if verdict == "ERROR":
+                    with self.assertRaises(gateway.VerificationFailure) as caught:
+                        gateway.Gateway.verify(w, payload)
+                    self.assertEqual(str(caught.exception), "Verifier context/infrastructure failure: " + reason)
+                else:
+                    self.assertEqual(gateway.Gateway.verify(w, payload)["verdict"], verdict)
+
+    def test_verifier_error_prefix_once_in_both_phases(self):
+        for phase in ("PLAN", "TASK"):
+            with self.subTest(phase=phase):
+                w = self.worker()
+                reason = "Required trusted context unavailable; original diagnostic."
+
+                def run(argv, stdin=None, cwd=None):
+                    Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps({
+                        "verdict": "ERROR", "reasons": [reason], "risky": False}))
+                    return ""
+
+                w.run = run
+                with self.assertRaises(gateway.VerificationFailure) as caught:
+                    gateway.Gateway.verify(w, {"verification_phase": phase})
+                self.assertEqual(str(caught.exception), "Verifier context/infrastructure failure: " + reason)
 
     def test_verification_phase_is_required_and_closed(self):
         w = self.worker()

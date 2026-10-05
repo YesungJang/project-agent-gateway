@@ -108,6 +108,9 @@ VERIFICATION_CONTRACTS = {
 proposed plan is executable, scoped, safe, and satisfies the Issue against trusted
 repository context. For a requirements critique without a plan, evaluate requirements
 and feasibility only. Acceptance criteria describe future outcomes, not completed work.
+Do not demand hidden reasoning or historical proof of agent actions that cannot be
+reconstructed from artifacts; assess explicitly required future audit/log artifacts
+for feasibility, not evidence of their completion.
 Check referenced paths, command plausibility against manifests/config, task ordering
 and dependencies, write scope against allowed_paths, and prohibited/risky operations.
 MUST NOT require post-change README/content, implementation diff, test execution results,
@@ -124,8 +127,24 @@ deterministic Gateway configuration; its presence does not require workflow insp
 """,
     "TASK": """TASK verification occurs AFTER edits and configured task validation.
 Verify the task's acceptance criteria using post-change sources, diff, and task-specific validation evidence.
-These may be required here: missing necessary evidence => ERROR; evidence of unmet
-criteria or incorrect implementation => FAIL with actionable reasons.
+Verify observable outcomes against the Issue and trusted repository context, not
+unverifiable agent process history. Issue/task wording such as inspect package.json
+before editing, check repository structure, or verify existing configuration first
+is implementation instructions, not audit requirements.
+MUST NOT require chronological agent-action evidence: proof Claude read a file before editing,
+inspected files in a particular order, executed exploratory commands, or followed an
+internal reasoning process. Do not demand hidden reasoning or historical proof that
+cannot be reconstructed from artifacts. Missing such history is neither FAIL nor ERROR.
+Only if the Issue explicitly requires an audit/log artifact or process evidence as an
+acceptance artifact, verify that artifact's presence and required content using the
+supplied evidence; do not invent additional history requirements. A confirmed absent required artifact => FAIL;
+an artifact with incorrect content => FAIL; unavailable context needed to assess it => ERROR.
+Compare README commands with supplied package.json scripts, Cargo.toml, and
+repository_manifest structure: correct observable result => PASS;
+observable mismatch => FAIL with actionable reasons;
+genuinely missing required trusted context => ERROR. Required post-change sources,
+diff and validation evidence remain necessary; passing tests do not override an
+observable mismatch. Preserve allowed/protected path checks and safety requirements.
 test_results records successful Gateway execution of configured validation commands,
 not merely proposed tests. Do not run commands or require a Git checkout in this isolated
 workspace; use the supplied evidence. Remain fresh and read-only.
@@ -514,7 +533,7 @@ class Gateway:
         ):
             raise VerificationFailure("Invalid verifier result")
         if result["verdict"] == "ERROR":
-            raise VerificationFailure("Verifier context/infrastructure failure: " + "; ".join(result["reasons"]))
+            raise VerificationFailure("; ".join(result["reasons"]))
         return result
 
     def apply(self, result):
@@ -781,6 +800,7 @@ class Gateway:
                             else self.verify(
                                 {
                                     "verification_phase": "TASK",
+                                    "issue": context["issue"],
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,
