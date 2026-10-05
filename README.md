@@ -4,7 +4,7 @@ Python 3.12 の標準ライブラリのみ。GitHub Issue → Claude の計画 �
 
 ## 実行
 
-`config.example.json` をリポジトリ外の信頼済み設定にコピーし、対象・許可パス・既存の検証コマンド・必須 CI 名を設定する。設定と state はエージェント編集範囲外に置く。依存インストール・更新は行わない。
+`config.example.json` をリポジトリ外の信頼済み設定にコピーし、対象・許可パス・既存の検証コマンド・必須 CI 名を設定する。設定と state はエージェント編集範囲外に置く。依存準備が必要なプロジェクトでは、管理者が確認した `bootstrap` を設定する。省略時は依存インストール・生成を行わない。
 
 ```sh
 mise exec -- python3 -m unittest discover -s tests -v
@@ -22,6 +22,24 @@ GitHub 書き込みも承認済みの場合に限り `--publish` を追加する
 - `gateway:done`
 
 queued ラベルを付けた Issue を古い番号から1件処理して終了する。v0 は常駐サービスを導入しない。手動または信頼済みスケジューラで同じコマンドを繰り返す。全ワーカーは同じ state を使用する。Mac のファイルロックで1件ずつ実行する。
+
+## Worktree bootstrap
+
+Git worktree には Git 管理下のファイルだけが入り、元 checkout の `node_modules` や生成済みパッケージは引き継がれない。必要な準備を信頼済み Gateway 設定の任意の `bootstrap` に argv 配列のリストで指定する。例（実際のコマンドは対象プロジェクトに合わせて管理者が確認する）:
+
+```json
+"bootstrap": [
+  ["npm", "--prefix", "web", "ci"],
+  ["npm", "--prefix", "web", "run", "build:generated"]
+]
+```
+
+- 省略または `[]` は何もしない。文字列コマンド、空の argv、文字列以外・空文字・NUL を含む引数は設定エラー。
+- origin の確認と新規 worktree 作成後、その Issue worktree を cwd として順番に一度だけ実行する。計画生成・Claude 実装・タスク検証・Codex TASK 検証・全体検証より前に完了する。タスク追加や修復では再実行しない。
+- 実行元は信頼済み設定だけ。Issue、計画、Claude/Codex 出力からコマンドを追加・選択しない。シェルを介さず実行するため、シェル展開・パイプ・リダイレクトは使えない。
+- 各コマンドに既存の `timeout_seconds` を適用する。非ゼロ終了・起動失敗・タイムアウトは `BootstrapFailure`（環境障害）として直ちに `approval-required` で停止する。失敗理由には `bootstrap` のゼロ始まりの添字と実行ファイル名を記録し、実行ログは従来の private state に保持する。後続コマンド・Claude 修復は実行せず、実装修復回数も消費しない。`Task validation/disagreement unresolved` には分類しない。
+- bootstrap は検証コマンドと同様にローカルの信頼済みコードを実行する。管理者は依存の install scripts を含む実行内容を確認し、秘密の読み取り・外部送信を許可するコマンドを無断で設定しない。生成物は対象リポジトリの既存の ignore 設定に従う。Gateway が ignore や許可パスを自動追加することはなく、追跡ファイルや ignore されない生成物への変更には既存の編集・差分・merge gates が適用される。
+- 失敗時も worktree とログを保持する。既存どおり自動再開はせず、管理者が設定・環境と残った worktree を調査する。
 
 ## 安全と状態
 

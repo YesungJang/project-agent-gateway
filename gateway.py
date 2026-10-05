@@ -23,6 +23,10 @@ class VerificationFailure(ApprovalRequired):
     """Verifier/context/infrastructure failure; never repair the plan."""
 
 
+class BootstrapFailure(ApprovalRequired):
+    """Worktree environment preparation failed; never repair implementation."""
+
+
 class GatePending(ApprovalRequired):
     pass
 
@@ -239,6 +243,14 @@ def validate_config(cfg):
             or not all(isinstance(x, str) and x and "\x00" not in x for x in argv)
         ):
             raise ValueError("Validation commands must be argv arrays")
+    bootstrap = cfg.get("bootstrap", [])
+    if not isinstance(bootstrap, list) or any(
+        not isinstance(argv, list)
+        or not argv
+        or not all(isinstance(x, str) and x and "\x00" not in x for x in argv)
+        for argv in bootstrap
+    ):
+        raise ValueError("Bootstrap commands must be argv arrays")
     if any(x not in cfg["validation"] for x in cfg["full_validation"]):
         raise ValueError("Unknown full validation command")
     if not isinstance(cfg.get("require_branch_protection", True), bool):
@@ -548,6 +560,17 @@ class Gateway:
             self.git("status", "--porcelain"),
         )
 
+    def bootstrap(self):
+        # Config is trusted; Issue/agent payloads never select preparation commands.
+        for index, argv in enumerate(self.cfg.get("bootstrap", [])):
+            try:
+                self.run(argv, cwd=self.cwd)
+            except (ApprovalRequired, OSError) as exc:
+                raise BootstrapFailure(
+                    f"Bootstrap/environment failure at bootstrap[{index}] "
+                    f"({argv[0]!r}): {exc}"
+                ) from exc
+
     def tests(self, names):
         if not names or any(x not in self.cfg["validation"] for x in names):
             raise ApprovalRequired("Unknown/empty test selection")
@@ -697,7 +720,8 @@ class Gateway:
             self.git("worktree", "add", "-b", branch, str(worktree), base)
             self.cwd = worktree
             self.save("running", worktree=str(worktree), base=base, branch=branch)
-            # Prevent automatic execution of repository hooks in Gateway-owned Git commands.
+            # Once per new worktree, outside all planning/task repair loops.
+            self.bootstrap()
             try:
                 sources = self.read_context()
             except VerificationFailure as exc:

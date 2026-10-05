@@ -129,6 +129,115 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(w.once())
         self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
 
+    def test_bootstrap_order_worktree_once_across_tasks_and_repairs(self):
+        # Ignored dependencies exist only in the original checkout initially.
+        (self.repo / ".gitignore").write_text("dependencies/\n")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-m", "ignore generated dependencies")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        (self.repo / "dependencies").mkdir()
+        (self.repo / "dependencies/ready").write_text("original")
+        self.cfg["bootstrap"] = [
+            ["python3", "-c", 'from pathlib import Path; p=Path("dependencies"); assert not p.exists(); p.mkdir(); (p/"ready").write_text("first")'],
+            ["python3", "-c", 'from pathlib import Path; p=Path("dependencies/ready"); assert p.read_text()=="first"; p.write_text(str(Path.cwd()))'],
+        ]
+        self.cfg["validation"]["unit"] = ["python3", "-c", 'from pathlib import Path; assert Path("dependencies/ready").read_text()==str(Path.cwd())']
+        w = self.worker(fail_task=True)
+        original = w.claude
+
+        def claude(payload, schema):
+            self.assertEqual((w.cwd / "dependencies/ready").read_text(), str(w.cwd))
+            result = original(payload, schema)
+            if schema == gateway.PLAN_SCHEMA:
+                result["tasks"] *= 2
+            else:
+                result["edits"][0]["content"] = f'def greet(value={w.verifications}):\n    return "hello"\n'
+            return result
+
+        with patch.object(w, "claude", side_effect=claude), patch.object(w, "run", wraps=w.run) as run:
+            w.once()
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "pr-ready")
+        self.assertEqual([t["attempts"] for t in state["completed_tasks"]], [2, 1])
+        for argv in self.cfg["bootstrap"]:
+            calls = [c for c in run.call_args_list if c.args[0] == argv]
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].kwargs["cwd"], Path(state["worktree"]))
+        self.assertEqual((self.repo / "dependencies/ready").read_text(), "original")
+
+    def test_bootstrap_failure_stops_without_implementation_or_repair(self):
+        for failure in (gateway.ApprovalRequired("Command failed"),
+                        gateway.ApprovalRequired("Timeout: tool"),
+                        FileNotFoundError("missing executable")):
+            with self.subTest(failure=failure):
+                self.cfg["bootstrap"] = [["prepare", "dependencies"], ["never-run"]]
+                w = self.worker()
+                original = w.run
+                executed = []
+
+                def run(argv, stdin=None, cwd=None, executed=executed, failure=failure, original=original):
+                    if argv in self.cfg["bootstrap"]:
+                        executed.append(argv)
+                        raise failure
+                    return original(argv, stdin, cwd)
+
+                with (
+                    patch.object(w, "run", side_effect=run),
+                    patch.object(w, "claude") as claude,
+                    patch.object(w, "tests") as tests,
+                    patch.object(w, "verify") as verify,
+                    self.assertRaisesRegex(gateway.BootstrapFailure, r"Bootstrap/environment failure.*bootstrap\[0\].*prepare"),
+                ):
+                    w.process({"number": 1, "title": "test", "body": ""})
+                claude.assert_not_called()
+                tests.assert_not_called()
+                verify.assert_not_called()
+                self.assertEqual(executed, [["prepare", "dependencies"]])
+                state = json.loads((w.state / "issue-1.json").read_text())
+                self.assertEqual(state["state"], "approval-required")
+                self.assertNotIn("Task validation/disagreement unresolved", state["reason"])
+                self.assertNotIn("completed_tasks", state)
+
+    def test_bootstrap_real_command_failure_and_literal_shell_arguments(self):
+        self.cfg["bootstrap"] = [[
+            "python3", "-c",
+            'import sys; assert sys.argv[1] == "$(touch injected)"; raise SystemExit(7)',
+            "$(touch injected)",
+        ]]
+        w = self.worker()
+        with patch.object(w, "claude") as claude, self.assertRaises(gateway.BootstrapFailure):
+            w.once()
+        claude.assert_not_called()
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertFalse((Path(state["worktree"]) / "injected").exists())
+        logs = [json.loads(p.read_text()) for p in w.state.glob("1-*.json")]
+        self.assertTrue(any(log["argv"] == self.cfg["bootstrap"][0] and log["status"] == 7 for log in logs))
+
+    def test_empty_bootstrap_preserves_existing_behavior(self):
+        self.cfg["bootstrap"] = []
+        w = self.worker()
+        w.once()
+        self.assertEqual(json.loads((w.state / "issue-1.json").read_text())["state"], "pr-ready")
+
+    def test_bootstrap_config_requires_argv_arrays(self):
+        for value in (None, "echo hi", {}, ["echo hi"], [[]], [[""]], [[1]], [["a\x00b"]]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                gateway.validate_config({**self.cfg, "bootstrap": value})
+        gateway.validate_config({**self.cfg, "bootstrap": []})
+
+    def test_bootstrap_never_uses_issue_or_agent_commands(self):
+        w = self.worker()
+        original = w.claude
+        injected = [["untrusted-bootstrap", "$(touch injected)"]]
+
+        def claude(payload, schema):
+            return {**original(payload, schema), "bootstrap": injected}
+
+        with patch.object(w, "claude", side_effect=claude), patch.object(w, "run", wraps=w.run) as run:
+            w.process({"number": 1, "title": "bootstrap", "body": json.dumps({"bootstrap": injected}), "bootstrap": injected})
+        self.assertFalse(any(c.args[0] == injected[0] for c in run.call_args_list))
+        self.assertEqual(json.loads((w.state / "issue-1.json").read_text())["state"], "pr-ready")
+
     def test_plan_disagreement_stops_before_edits(self):
         w = self.worker(fail_plan=True)
         with self.assertRaises(gateway.ApprovalRequired):
