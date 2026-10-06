@@ -1158,6 +1158,110 @@ class GatewayTests(unittest.TestCase):
             with self.assertRaisesRegex(gateway.VerificationFailure, "Symlink"):
                 w.read_context()
 
+    def test_verifier_diagnostic_lifecycle(self):
+        cases = [
+            (phase, outcome)
+            for phase in ("PLAN", "TASK", "CRITIQUE")
+            for outcome in ("PASS-risk", "FAIL-risk", "ERROR-risk", "context", "timeout")
+        ] + [(phase, "retry") for phase in ("PLAN", "TASK")]
+        for number, (phase, outcome) in enumerate(cases, 200):
+            with self.subTest(phase=phase, outcome=outcome):
+                w = self.worker()
+                w.cfg = {**self.cfg, "mode": "DEBATE" if phase == "CRITIQUE" else "NORMAL"}
+                reasons = ["Permission boundary requires review", "Protected operation needs approval"]
+                calls, proposals = [], []
+                original_run, original_claude = w.run, w.claude
+
+                def claude(payload, schema):
+                    proposals.append((schema, payload))
+                    return original_claude(payload, schema)
+
+                def run(argv, stdin=None, cwd=None):
+                    if argv[0] != "codex":
+                        return original_run(argv, stdin, cwd)
+                    payload = json.loads(stdin.rsplit("\n", 1)[1])
+                    selected = (payload["verification_phase"] == phase or
+                                phase == "CRITIQUE" and payload.get("stage") == "requirements critique")
+                    verdict = {"verdict": "PASS", "risky": False, "reasons": []}
+                    if selected:
+                        calls.append(payload)
+                        if outcome == "timeout":
+                            raise gateway.ApprovalRequired("Timeout: verifier fixture")
+                        if outcome == "context":
+                            verdict = {"verdict": "ERROR", "risky": False,
+                                       "reasons": ["Missing required context"]}
+                        elif outcome.endswith("-risk"):
+                            verdict = {"verdict": outcome.split("-")[0], "risky": True, "reasons": reasons}
+                        elif len(calls) == 1:
+                            verdict = {"verdict": "FAIL", "risky": False, "reasons": ["Correct the criterion"]}
+                    Path(argv[argv.index("--output-last-message") + 1]).write_text(json.dumps(verdict))
+                    return ""
+
+                w.run = run
+                w.claude = claude
+                w.verify = lambda payload: gateway.Gateway.verify(w, payload)
+                issue = {"number": number, "title": "Fixture", "body": "Deterministic verification"}
+                if outcome == "retry":
+                    w.process(issue)
+                else:
+                    with self.assertRaises(gateway.ApprovalRequired) as caught:
+                        w.process(issue)
+                    self.assertEqual(isinstance(caught.exception, gateway.VerificationFailure),
+                                     outcome in ("context", "timeout"))
+                    if outcome.endswith("-risk"):
+                        self.assertEqual(caught.exception.reasons, reasons)
+                state = json.loads((w.state / f"issue-{number}.json").read_text())
+                prefix = "task" if phase == "TASK" else "plan"
+                if outcome == "retry":
+                    self.assertEqual(state["state"], "pr-ready")
+                    self.assertEqual(len(calls), 2)
+                    matching = [p for schema, p in proposals if schema ==
+                                (gateway.EDIT_SCHEMA if phase == "TASK" else gateway.PLAN_SCHEMA)]
+                    self.assertEqual(matching[1]["feedback"], ["Correct the criterion"])
+                    self.assertEqual(state[prefix + "_gate"], "PASS")
+                    self.assertEqual(state[prefix + "_attempts"], 2)
+                else:
+                    self.assertEqual(state["state"], "approval-required")
+                    self.assertEqual(len(calls), 1, "Risk/errors must never trigger repair")
+                    self.assertEqual(len(proposals), {"PLAN": 1, "TASK": 2, "CRITIQUE": 0}[phase])
+                    self.assertEqual(state[prefix + "_attempts"], 0 if phase == "CRITIQUE" else 1)
+                    self.assertEqual(state[prefix + "_gate"], "RISK" if outcome.endswith("-risk") else "ERROR")
+                    if outcome.endswith("-risk"):
+                        self.assertEqual(state[prefix + "_feedback"], reasons)
+                        for reason in reasons:
+                            self.assertIn(reason, state["reason"])
+                    else:
+                        self.assertIn("context/infrastructure", state["reason"])
+                        self.assertEqual(state[prefix + "_feedback"], [state["reason"]])
+                    self.assertFalse(state.get("completed_tasks"))
+
+    def test_task_read_context_failure_persists_diagnostics_without_repair(self):
+        w = self.worker()
+        original_read_context = w.read_context
+        reason = "Missing/unreadable task context"
+
+        def read_context():
+            if reader.call_count == 1:
+                return original_read_context()
+            raise gateway.VerificationFailure(reason)
+
+        with patch.object(w, "read_context", side_effect=read_context) as reader, \
+             patch.object(w, "claude", wraps=w.claude) as proposer, \
+             patch.object(w, "verify", wraps=w.verify) as verifier:
+            with self.assertRaisesRegex(gateway.VerificationFailure, reason):
+                w.process({"number": 300, "title": "Fixture", "body": "Task context failure"})
+            self.assertEqual(reader.call_count, 2)
+            self.assertEqual([call.args[1] for call in proposer.call_args_list],
+                             [gateway.PLAN_SCHEMA, gateway.EDIT_SCHEMA])
+            self.assertEqual(verifier.call_count, 1)
+        state = json.loads((w.state / "issue-300.json").read_text())
+        self.assertEqual(state["state"], "approval-required")
+        self.assertEqual(state["task_gate"], "ERROR")
+        self.assertEqual(state["task_attempts"], 1)
+        self.assertEqual(state["task_feedback"], [reason])
+        self.assertEqual(state["reason"], reason)
+        self.assertEqual(state["completed_tasks"], [])
+
     def test_plan_repair_config_requires_bounded_integer(self):
         for value in (-1, 6, True, 1.5, "2", None):
             with self.subTest(value=value), self.assertRaises(ValueError):

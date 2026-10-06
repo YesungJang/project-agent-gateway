@@ -20,6 +20,14 @@ class ApprovalRequired(RuntimeError):
     pass
 
 
+class VerifierRisk(ApprovalRequired):
+    """Structured verifier risk; requires human approval, never repair."""
+
+    def __init__(self, reasons):
+        self.reasons = reasons or ["Verifier detected risk"]
+        super().__init__("Verifier detected risk: " + "; ".join(self.reasons))
+
+
 class VerificationFailure(ApprovalRequired):
     """Verifier/context/infrastructure failure; never repair the plan."""
 
@@ -563,7 +571,7 @@ class Gateway:
         except (ApprovalRequired, OSError, ValueError, TypeError) as exc:
             raise VerificationFailure(f"Verifier context/infrastructure failure: {exc}") from exc
         if result["risky"]:
-            raise ApprovalRequired("Verifier detected risk")
+            raise VerifierRisk(result["reasons"])
         return result
 
     def _verify(self, payload):
@@ -633,7 +641,7 @@ class Gateway:
             or (result["verdict"] != "PASS" and not result["reasons"])
         ):
             raise VerificationFailure("Invalid verifier result")
-        if result["verdict"] == "ERROR":
+        if result["verdict"] == "ERROR" and not result["risky"]:
             raise VerificationFailure("; ".join(result["reasons"]))
         return result
 
@@ -800,8 +808,11 @@ class Gateway:
                     verdict = self.verify({**context, "plan": plan, "verification_phase": "PLAN"})
                     if verdict["verdict"] == "ERROR":
                         raise VerificationFailure("Verifier context/infrastructure failure: " + "; ".join(verdict["reasons"]))
-                except VerificationFailure as exc:
-                    self.save("running", plan_gate="ERROR", plan_attempts=attempt + 1, plan_feedback=[str(exc)])
+                except (VerificationFailure, VerifierRisk) as exc:
+                    self.save("running", plan_gate="RISK" if isinstance(exc, VerifierRisk) else "ERROR",
+                              plan_attempts=attempt + 1,
+                              plan_feedback=exc.reasons if isinstance(exc, VerifierRisk) else [str(exc)],
+                              reason=str(exc))
                     raise
             self.save("running", plan_gate=verdict["verdict"], plan_attempts=attempt + 1, plan_feedback=verdict["reasons"])
             if verdict["verdict"] == "PASS":
@@ -852,9 +863,16 @@ class Gateway:
             }
             mode = self.cfg.get("mode", "NORMAL")
             if mode == "DEBATE":
-                context["independent_critique"] = self.verify(
-                    {**context, "stage": "requirements critique", "verification_phase": "PLAN"}
-                )
+                try:
+                    context["independent_critique"] = self.verify(
+                        {**context, "stage": "requirements critique", "verification_phase": "PLAN"}
+                    )
+                except (VerificationFailure, VerifierRisk) as exc:
+                    self.save("running", plan_gate="RISK" if isinstance(exc, VerifierRisk) else "ERROR",
+                              plan_attempts=0,
+                              plan_feedback=exc.reasons if isinstance(exc, VerifierRisk) else [str(exc)],
+                              reason=str(exc))
+                    raise
             plan = self.plan_gate(context, mode)
             tasks = plan["tasks"]
             self.save("running", plan=plan, completed_tasks=[])
@@ -875,15 +893,15 @@ class Gateway:
                     names = self.changed(base)
                     if names:
                         self.git("add", "--", *names)
-                    current_sources = self.read_context()
-                    # Include validated writes even when outside the independent read selection.
-                    for name in names:
-                        target = self.cwd / name
-                        if target.exists():
-                            current_sources[name] = target.read_text()
-                    self.repository_manifest["copied"] = sorted(current_sources)
                     fingerprint = self.fingerprint()
                     try:
+                        current_sources = self.read_context()
+                        # Include validated writes even when outside the independent read selection.
+                        for name in names:
+                            target = self.cwd / name
+                            if target.exists():
+                                current_sources[name] = target.read_text()
+                        self.repository_manifest["copied"] = sorted(current_sources)
                         self.tests(task["tests"])
                         if fingerprint != self.fingerprint():
                             raise ApprovalRequired(
@@ -914,7 +932,11 @@ class Gateway:
                                 }
                             )
                         )
-                    except VerificationFailure:
+                    except (VerificationFailure, VerifierRisk) as exc:
+                        self.save("running", task_gate="RISK" if isinstance(exc, VerifierRisk) else "ERROR",
+                                  task_attempts=attempt + 1,
+                                  task_feedback=exc.reasons if isinstance(exc, VerifierRisk) else [str(exc)],
+                                  reason=str(exc))
                         raise
                     except ApprovalRequired as exc:
                         verdict = {"verdict": "FAIL", "reasons": [str(exc)]}
@@ -922,6 +944,8 @@ class Gateway:
                         raise ApprovalRequired(
                             "Test/verifier modified source, index, or HEAD"
                         )
+                    self.save("running", task_gate=verdict["verdict"], task_attempts=attempt + 1,
+                              task_feedback=verdict["reasons"])
                     if verdict["verdict"] == "PASS":
                         context["repository_manifest"] = self.repository_manifest
                         for name in names:
