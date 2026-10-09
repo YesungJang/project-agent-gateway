@@ -191,6 +191,7 @@ class Reader:
         stages = {stage: {'outcome': 'unknown', 'timestamp': None} for stage in PIPELINE}
         tasks, diagnostics, checks = {}, [], []
         view = dict(id=identity, repository=None, issue=None, status='unknown', mode=None,
+            planned_tasks=None, plan_attempts=0, plan_repairs=0,
             publish=None, started_at=None, updated_at=None, ended_at=None, current_stage='unknown',
             stages=stages, tasks=[], diagnostics=diagnostics, ci=checks,
             pr={'published': False, 'number': None, 'url': None, 'head': None,
@@ -210,6 +211,12 @@ class Reader:
                 view['ended_at'] = event['timestamp']
             if details.get('mode'):
                 view['mode'] = details['mode']
+            if stage in ('plan', 'plan_gate'):
+                view['plan_attempts'] = max(view['plan_attempts'], event['attempt'])
+            if stage == 'repair' and details.get('phase') == 'PLAN':
+                view['plan_repairs'] = max(view['plan_repairs'], details.get('repair_count', 0))
+            if 'task_count' in details and 1 <= details['task_count'] <= 12:
+                view['planned_tasks'] = details['task_count']
             if 'publish' in details:
                 view['publish'] = details['publish']
             if stage in stages:
@@ -229,6 +236,8 @@ class Reader:
                     task['status'] = outcome
                 if stage in ('task_validation', 'task_gate', 'task_commit', 'repair'):
                     task['stages'][stage] = {'outcome': outcome, 'attempt': event['attempt']}
+                    if outcome in ('FAIL', 'ERROR', 'RISK'):
+                        task['status'] = outcome
             if 'diagnostic_code' in details:
                 diagnostic = {k: details[k] for k in ('diagnostic_code', 'summary')}
                 diagnostic.update(stage=stage, outcome=outcome, task_id=task_id,
@@ -251,7 +260,11 @@ class Reader:
             stages['debate'] = {'outcome': 'skipped', 'timestamp': None}
         if errors:
             view['status'] = 'unknown'
-        view['tasks'] = list(tasks.values())[:12]
+        for index in range(1, (view['planned_tasks'] or 0) + 1):
+            task_id = f'task-{index}'
+            tasks.setdefault(task_id, dict(id=task_id, status='unknown', attempts=0,
+                repairs=0, criteria_count=None, criteria_text='withheld', stages={}, diagnostics=[]))
+        view['tasks'] = sorted(tasks.values(), key=lambda t: int(t['id'][5:]))[:12]
         view['diagnostics'] = diagnostics[-100:]
         for task in view['tasks']:
             task['diagnostics'] = task['diagnostics'][-20:]

@@ -424,9 +424,14 @@ class Gateway:
         self.task_id = None
         self.event_attempt = 0
         self.event_state = 'unknown'
+        self.active_stage = None
 
     def event(self, stage, outcome, **details):
         """Best-effort observation; never influence gates or retry operations."""
+        if outcome == 'started' and stage not in ('worker', 'queue', 'claim', 'run', 'state'):
+            self.active_stage = stage
+        elif self.active_stage == stage and outcome != 'started':
+            self.active_stage = None
         if getattr(self, 'observer', None) is None or self.observation_failed:
             return
         try:
@@ -439,16 +444,18 @@ class Gateway:
 
     @staticmethod
     def observation_error(exc):
+        timeout = any(isinstance(cause, ApprovalRequired) and str(cause).startswith(
+            ('Timeout:', 'CI/mergeability wait timed out:')) for cause in (exc, exc.__cause__))
         if isinstance(exc, GatePending):
             return 'pending', None
         if isinstance(exc, VerifierRisk):
             return 'RISK', 'VERIFIER_RISK'
         if isinstance(exc, BootstrapFailure):
-            return 'ERROR', 'BOOTSTRAP_FAILED'
+            return 'ERROR', 'TIMEOUT' if timeout else 'BOOTSTRAP_FAILED'
         if isinstance(exc, VerificationFailure):
-            return 'ERROR', 'VERIFIER_ERROR'
+            return 'ERROR', 'TIMEOUT' if timeout else 'VERIFIER_ERROR'
         if isinstance(exc, ApprovalRequired):
-            return 'FAIL', 'TIMEOUT' if str(exc).startswith(('Timeout:', 'CI/mergeability wait timed out:')) else 'GATE_FAILED'
+            return 'FAIL', 'TIMEOUT' if timeout else 'GATE_FAILED'
         return 'ERROR', 'CRASH'
 
     def observed_call(self, stage, function, *args, **kwargs):
@@ -813,6 +820,13 @@ class Gateway:
         # This projection never contributes to the actual merge decision.
         if getattr(self, 'observer', None) is None or self.observation_failed:
             return
+        try:
+            self._observe_ci(data, head, base)
+        except (ValueError, TypeError, AttributeError, UnicodeError):
+            self.observation_failed = True
+            print('OBSERVATION_FAILED: CI metadata unavailable; gates unchanged.', file=sys.stderr)
+
+    def _observe_ci(self, data, head, base):
         # Observe exact identities using the SAME deterministic CI contract.
         checks = []
         rollup = data.get('statusCheckRollup')
@@ -841,7 +855,15 @@ class Gateway:
         for identifier in self.cfg['required_checks']:
             if not any(c['identifier'] == identifier for c in checks):
                 checks.append({'identifier': identifier, 'outcome': 'pending'})
-        self.event('ci', 'pending', checks=checks, head=head, base=base)
+        try:
+            required_check_gate(rollup, self.cfg['required_checks'])
+            outcome = 'PASS'
+        except GatePending:
+            outcome = 'pending'
+        except ApprovalRequired:
+            outcome = 'FAIL'
+        self.event('ci', outcome, checks=checks, head=head, base=base)
+
     def wait_merge_gate(self, pr, head, base):
         deadline = time.monotonic() + self.cfg.get("ci_wait_seconds", 300)
         while True:
@@ -992,7 +1014,7 @@ class Gateway:
                         },
                         EDIT_SCHEMA,
                     )
-                    self.apply(result)
+                    self.observed_call('task', self.apply, result)
                     names = self.changed(base)
                     if names:
                         self.git("add", "--", *names)
@@ -1007,6 +1029,7 @@ class Gateway:
                         self.repository_manifest["copied"] = sorted(current_sources)
                         self.observed_call('task_validation', self.tests, task["tests"])
                         if fingerprint != self.fingerprint():
+                            self.event('task_validation', 'FAIL', diagnostic_code='GATE_FAILED')
                             raise ApprovalRequired(
                                 "Test modified source, index, or HEAD"
                             )
@@ -1044,6 +1067,7 @@ class Gateway:
                     except ApprovalRequired as exc:
                         verdict = {"verdict": "FAIL", "reasons": [str(exc)]}
                     if fingerprint != self.fingerprint():
+                        self.event('task_gate', 'ERROR', diagnostic_code='GATE_FAILED')
                         raise ApprovalRequired(
                             "Test/verifier modified source, index, or HEAD"
                         )
@@ -1085,7 +1109,8 @@ class Gateway:
             self.changed(base)
             before = self.git("rev-parse", "HEAD")
             fingerprint = self.fingerprint()
-            self.observed_call('full_validation', self.tests, self.cfg["full_validation"])
+            self.event('full_validation', 'started')
+            self.tests(self.cfg["full_validation"])
             if fingerprint != self.fingerprint():
                 raise ApprovalRequired("Full validation modified source/index/HEAD")
             if (
@@ -1093,6 +1118,7 @@ class Gateway:
                 or self.git("rev-parse", "HEAD") != before
             ):
                 raise ApprovalRequired("Validation modified the checkout")
+            self.event('full_validation', 'PASS')
             if before == base:
                 raise ApprovalRequired("No changes produced")
             body = worktree.parent / f"pr-{self.job}.md"
@@ -1143,7 +1169,7 @@ class Gateway:
             self.save("pr-ready", pr=pr, head=before, base=base)
             # PR URL is reconstructed from its numeric ID, never copied from output.
             self.event('pr_publish', 'PASS', head=before, base=base,
-                       pr_number=int(pr.rsplit('/', 1)[-1]) if re.fullmatch(r'https://github.com/' + re.escape(expected) + r'/pull/[1-9][0-9]*', pr) else None)
+                       pr_number=int(pr.rsplit('/', 1)[-1]) if re.fullmatch(r'https://github.com/' + re.escape(expected) + r'/pull/[1-9][0-9]{0,15}', pr) else None)
             if mode == "FAST":
                 for stage in ('ci', 'merge_gate', 'merge', 'issue_close'):
                     self.event(stage, 'skipped', mode='FAST')
@@ -1159,6 +1185,8 @@ class Gateway:
             self.save("done", pr=pr, head=before)
         except Exception as exc:
             outcome, code = self.observation_error(exc)
+            if self.active_stage is not None:
+                self.event(self.active_stage, outcome, diagnostic_code=code)
             self.event('run', outcome, diagnostic_code=code)
             try:
                 self.save(

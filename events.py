@@ -18,7 +18,7 @@ STAGES = frozenset(('worker', 'queue', 'claim', 'worktree', 'bootstrap', 'contex
                     'issue_close', 'state', 'run'))
 OUTCOMES = frozenset(('started', 'PASS', 'FAIL', 'ERROR', 'RISK', 'pending',
                       'skipped', 'approval-required', 'pr-ready', 'done',
-                      'running', 'idle', 'exited', 'lock-contended', 'unknown'))
+                      'running', 'failed', 'idle', 'exited', 'lock-contended', 'unknown'))
 DIAGNOSTICS = {
     'OBSERVATION_FAILED': 'Event recording failed; history may be incomplete.',
     'BOOTSTRAP_FAILED': 'Environment preparation failed; operator review required.',
@@ -116,7 +116,7 @@ def public_event(value):
         raise EventError('Invalid task identity')
     timestamp = value.get('timestamp')
     try:
-        if not isinstance(timestamp, str) or not timestamp.endswith('Z') or len(timestamp) > 32:
+        if not isinstance(timestamp, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z', timestamp):
             raise ValueError()
         dt.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
     except ValueError:
@@ -151,14 +151,21 @@ class EventWriter:
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         self.file = os.fdopen(fd, 'wb', buffering=0)
         # Persist new directory entry as well as every completed line.
-        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        directory_fd = None
+        state_fd = None
         try:
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            state_fd = os.open(self.state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             os.fsync(directory_fd)
+            os.fsync(state_fd)
         except OSError:
             self.file.close()
             raise
         finally:
-            os.close(directory_fd)
+            if directory_fd is not None:
+                os.close(directory_fd)
+            if state_fd is not None:
+                os.close(state_fd)
 
     def append(self, stage, outcome, issue=None, task_id=None, attempt=0, **details):
         os.fstat(self.lock_fd)  # A closed worker lock must not keep recording.

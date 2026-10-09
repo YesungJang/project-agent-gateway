@@ -1,5 +1,26 @@
 # Agent Gateway v0
 
+## Read-only Dashboard MVP
+
+The independent observer and lightweight browser UI run with Python standard library
+only, on `http://127.0.0.1:8765`:
+
+```sh
+python3 dashboard.py --state /absolute/path/gateway-state --port 8765
+```
+
+It never starts the worker, calls GitHub, exposes raw prompts/logs/configuration, or
+offers approval/retry/merge/shell controls. Existing state without event history is
+displayed with unknown stage/time. New history is recorded by the instrumented
+single-shot worker under its existing lock; viewing the UI does not activate it.
+
+See [local startup and operations](docs/dashboard-operations.md),
+[event history](docs/event-history.md), [worker observation](docs/worker-observation.md),
+[read-only API](docs/read-only-api.md), [browser UI and synthetic demo](docs/dashboard-ui.md),
+and [verification and remaining acceptance work](docs/dashboard-verification.md).
+The implementation PRs remain drafts pending independent Codex CLI and real-browser
+verification. macOS-specific behavior has not been verified in the cloud session.
+
 Python 3.12 の標準ライブラリのみ。GitHub Issue → Claude の計画 → Codex の Plan Gate → タスクごとの編集案・テスト・Codex Gate・修復 → 全体検証 → PR → 決定論的 Merge Gate。
 
 ## 実行
