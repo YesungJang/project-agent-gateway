@@ -63,3 +63,6 @@ only and existing real configuration and ignore settings are untouched.
 
 GitHub Actions was inspected during final verification: the repository had zero
 workflow runs. No GitHub CI result is claimed as passed; no failing check is bypassed.
+The final combined commit-status read was denied with 403 (`Resource not accessible
+by integration`). Commit-status CI remains unknown and must be checked by an
+authorized reviewer before any merge.

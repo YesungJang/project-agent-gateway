@@ -42,7 +42,9 @@ implementation and this refresh, and targets `dashboard/04-dashboard-ui`.
   unverified. The original Mac working tree was unavailable.
 - Lock competition is stderr-only, and task criteria wording is withheld with
   counts. Reviewer assessment of these acceptance tradeoffs remains necessary.
-- GitHub Actions had zero runs when inspected. No passing CI is claimed.
+- GitHub Actions had zero runs when inspected. Reading combined commit status was
+  denied with 403 (`Resource not accessible by integration`); CI status is unknown.
+  No passing CI is claimed. A reviewer with status access must inspect it before merge.
 - `.gitignore` improvements are a proposal only; actual ignore/configuration and
   original test files are unchanged. Narrow historical credential-pattern scan
   found no matches in 53 blobs through #4; this is not a proof of absence.
