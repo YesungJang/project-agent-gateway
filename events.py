@@ -181,14 +181,14 @@ class EventWriter:
         self.file.close()
 
 
-def read_lines(path):
+def read_lines(path, max_events=10000):
     """Read complete bounded lines; readers never repair/truncate the file."""
     events, problems = [], []
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise EventError('Not a regular event file')
-        for _ in range(10000):
+        for _ in range(max_events):
             line = stream.readline(MAX_LINE + 1)
             if not line:
                 break
@@ -200,7 +200,7 @@ def read_lines(path):
                 break
             try:
                 events.append(public_event(json.loads(line)))
-            except (ValueError, UnicodeError, EventError):
+            except (ValueError, UnicodeError, TypeError, RecursionError, EventError):
                 problems.append('invalid-or-unsupported-event')
         else:
             if stream.read(1):
