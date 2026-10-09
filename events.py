@@ -50,7 +50,7 @@ def safe_details(details):
     """Drop unknown fields at BOTH write and HTTP projection boundaries."""
     result = {}
     for key in ('criteria_count', 'task_count', 'repair_count', 'observed_count',
-                'queue_limit', 'pid'):
+                'queue_limit', 'pid', 'pr_number', 'issue_number'):
         if _number(details.get(key)):
             result[key] = details[key]
     for key in ('publish', 'merged', 'queue_total_known'):
