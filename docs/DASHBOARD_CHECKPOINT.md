@@ -13,13 +13,16 @@ No Mac local working tree/configuration or Laplogos resource was modified.
 | #2 | `dashboard/02-pipeline-instrumentation` | `88783305facecc5f793fc7df3aed57c30e2e0504` | [#7](https://github.com/YesungJang/project-agent-gateway/pull/7) | 66 passed |
 | #3 | `dashboard/03-read-only-api` | `ddf5efb3f4521c4cdc49d3959618b906c1bd2eb9` | [#8](https://github.com/YesungJang/project-agent-gateway/pull/8) | 72 passed |
 | #4 | `dashboard/04-dashboard-ui` | `2c3ef4e6f21363485512aa64e9fe98dcf5f4ad2d` | [#9](https://github.com/YesungJang/project-agent-gateway/pull/9) | 75 passed |
-| #5 | `dashboard/05-security-and-operations` | See this branch's current `git log` | PR creation follows this checkpoint | 85 passed |
+| #5 | `dashboard/05-security-and-operations` | `4685dc59334b94a6720ce9e6562d76d082eb7010` (implementation; checkpoint refresh follows) | [#10](https://github.com/YesungJang/project-agent-gateway/pull/10) | 85 passed |
 
 `main` remains `026f95e04f934dd680652a6c9c99b3253dbe01e0`. All original 10 commits
 and their reachable objects were restored and SHA-verified, including the completed
 verifier-risk diagnostic fix. Do not redo that fix or the implemented #1–#5 work.
 No PR was merged, no Issue was closed, no real Gateway pipeline was run. The #2–#5
 PRs target their immediate dependency branch, not `main`.
+The current branch head may include this final documentation-only checkpoint refresh;
+use `git log -2` / the PR head SHA for its exact revision. PR #10 contains the final
+implementation and this refresh, and targets `dashboard/04-dashboard-ui`.
 
 ## Validation and remaining work
 

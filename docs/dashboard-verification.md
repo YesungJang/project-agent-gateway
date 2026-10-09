@@ -15,7 +15,7 @@ reimplementing it. Mac working-tree changes were unavailable and are not inferre
 | #2 instrumentation/worker status | #7 | 66 passed |
 | #3 local read-only API | #8 | 72 passed |
 | #4 browser Dashboard | #9 | 75 passed |
-| #5 regressions/operations | Final dependency branch | 85 passed (including original 56); default-port CLI smoke passed |
+| #5 regressions/operations | #10 | 85 passed (including original 56); default-port CLI smoke passed |
 
 Tests include permissions, append prefix preservation, fsync/write failures,
 restart identities, redaction, cut tails, mock worker transitions, observation
