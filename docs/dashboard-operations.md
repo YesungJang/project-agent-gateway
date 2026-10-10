@@ -91,7 +91,7 @@ normal. Task/run history and current worker health are separate.
 
 ## Review and rollout
 
-Review the stack from #6 → #7 → #8 → #9 → the #5 implementation PR. Subsequent PRs
+Review the stack from #6 → #7 → #8 → #9 → #10. Subsequent PRs
 target their dependency branch. After reviewing/merging a predecessor, retarget the
 next PR to `main` and inspect its diff/CI; resolve conflicts without force or bypass.
 Re-run the full Gateway suite before any merge proposal. Independent Codex CLI and

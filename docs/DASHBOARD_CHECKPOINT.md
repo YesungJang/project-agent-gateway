@@ -80,3 +80,13 @@ implementation and this refresh, and targets `dashboard/04-dashboard-ui`.
 
 Cloud state/demo files and CLI attempt logs outside the repository are temporary.
 The 12-scenario generator and all source/tests/docs are reproducible from GitHub.
+
+## Independent macOS follow-up — 2026-10-10
+
+See [macOS review](dashboard-macos-review-20261010.md) for executed results and
+per-PR merge assessment. Final local fixes pass all 85 tests without skips and
+actual headless Google Chrome checks. At review time, the remote heads contained
+macOS instrumentation fixture failures and the empty-history UI defect; fixes
+`5df6d12` and `3724865` are prepared for publication to PR #10 only. Original local review commits remain preserved.
+All five remote PRs remain Draft with zero checks/statuses and no approving review.
+No merge, rollout, configuration or Laplogos change occurred.
