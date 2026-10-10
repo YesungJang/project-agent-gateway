@@ -56,7 +56,7 @@ function renderOverview() {
 }
 function renderRun() {
   const run=snapshot?.runs.find(r=>r.id===selected);
-  if(!run){replace('pipeline',empty('No recorded stage evidence.'));replace('tasks',empty('No recorded tasks.'));replace('delivery',empty('No PR/CI evidence.'));replace('diagnostics',empty('No recorded diagnostics.'));return;}
+  if(!run){replace('run-summary',empty('No event history available.'));byId('task-progress').textContent='—';byId('diagnostic-count').textContent='0';replace('pipeline',empty('No recorded stage evidence.'));replace('tasks',empty('No recorded tasks.'));replace('delivery',empty('No PR/CI evidence.'));replace('diagnostics',empty('No recorded diagnostics.'));return;}
   const heading=node('div',undefined,'run-summary-top');heading.append(node('h2',run.issue?'Issue #'+run.issue:'Worker invocation'),badge(run.status),node('span',run.mode||'Mode unknown','badge'));
   const repo=node('p',run.repository||'Unknown repository','repository');
   const meta=metadata([['Run',run.id.slice(0,8)],['Current / last stage',run.current_stage],['Elapsed',duration(run.elapsed_seconds)],['Last event',duration(run.age_seconds)+' ago'],['Publication',run.publish===true?'Authorized':run.publish===false?'Dry-run':'Unknown']]);
