@@ -159,3 +159,15 @@ class DashboardTests(unittest.TestCase):
         (self.state / 'events' / ('run-'+str(uuid.uuid4())+'.jsonl')).symlink_to(self.state / 'worker.lock')
         (self.state / 'issue-5.json').symlink_to(self.writer.path)
         self.assertIn('unsafe-file', dashboard.Reader(self.state).snapshot()['problems'])
+
+    def test_planned_task_total_keeps_unstarted_work_unknown(self):
+        self.append('run', 'started', issue=1)
+        self.append('plan', 'PASS', issue=1, attempt=2, task_count=3)
+        self.append('repair', 'PASS', issue=1, attempt=2, phase='PLAN', repair_count=1)
+        self.append('task', 'done', issue=1, task_id='task-1', attempt=1, criteria_count=1)
+        view = dashboard.Reader(self.state).snapshot()['runs'][0]
+        self.assertEqual(view['planned_tasks'], 3)
+        self.assertEqual(view['plan_attempts'], 2)
+        self.assertEqual(view['plan_repairs'], 1)
+        self.assertEqual([t['status'] for t in view['tasks']], ['done', 'unknown', 'unknown'])
+        self.assertIsNone(view['tasks'][1]['criteria_count'])

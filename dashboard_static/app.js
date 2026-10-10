@@ -59,7 +59,7 @@ function renderRun() {
   if(!run){replace('run-summary',empty('No event history available.'));byId('task-progress').textContent='—';byId('diagnostic-count').textContent='0';replace('pipeline',empty('No recorded stage evidence.'));replace('tasks',empty('No recorded tasks.'));replace('delivery',empty('No PR/CI evidence.'));replace('diagnostics',empty('No recorded diagnostics.'));return;}
   const heading=node('div',undefined,'run-summary-top');heading.append(node('h2',run.issue?'Issue #'+run.issue:'Worker invocation'),badge(run.status),node('span',run.mode||'Mode unknown','badge'));
   const repo=node('p',run.repository||'Unknown repository','repository');
-  const meta=metadata([['Run',run.id.slice(0,8)],['Current / last stage',run.current_stage],['Elapsed',duration(run.elapsed_seconds)],['Last event',duration(run.age_seconds)+' ago'],['Publication',run.publish===true?'Authorized':run.publish===false?'Dry-run':'Unknown']]);
+  const meta=metadata([['Run',run.id.slice(0,8)],['Current / last stage',run.current_stage],['Elapsed',duration(run.elapsed_seconds)],['Last event',duration(run.age_seconds)+' ago'],['Publication',run.publish===true?'Authorized':run.publish===false?'Dry-run':'Unknown'],['Plan attempts / repairs',run.plan_attempts+' / '+run.plan_repairs]]);
   meta.children[2].querySelector('dd').id='run-elapsed';meta.children[3].querySelector('dd').id='run-age';
   const notes=[];
   if(run.quality!=='observed')notes.push(node('p','History incomplete: '+run.problems.join(', ')+'. Completion is unknown.','warning-text'));
