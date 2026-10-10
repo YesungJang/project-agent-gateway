@@ -90,3 +90,12 @@ macOS instrumentation fixture failures and the empty-history UI defect; fixes
 `5df6d12` and `3724865` are prepared for publication to PR #10 only. Original local review commits remain preserved.
 All five remote PRs remain Draft with zero checks/statuses and no approving review.
 No merge, rollout, configuration or Laplogos change occurred.
+
+## Stack integration follow-up — 2026-10-10
+
+See [integration follow-up](dashboard-integration-20261010.md) for newer evidence.
+Existing fixes are propagated to their originating #7/#9 branches and through
+the stack; updated branches pass 66/72/75/85 tests on macOS. Existing Mac state
+was verified read-only over HTTP and Chrome (four legacy states, no event history).
+PR #10's historical mergeability failure is not reproducible; its original cause
+is not established. CI and live-service execution remain unverified. No merge.
