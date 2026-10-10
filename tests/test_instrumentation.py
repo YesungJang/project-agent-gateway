@@ -10,7 +10,9 @@ import test_gateway
 
 
 class InstrumentationTests(unittest.TestCase):
-    setUp = test_gateway.GatewayTests.setUp
+    def setUp(self):
+        test_gateway.GatewayTests.setUp(self)
+        self.root = self.root.resolve()  # macOS temporary paths may have symlink ancestors.
     tearDown = test_gateway.GatewayTests.tearDown
     worker = test_gateway.GatewayTests.worker
 
