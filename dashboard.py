@@ -25,7 +25,11 @@ STATE_FILE = re.compile(r'issue-([1-9][0-9]{0,15})\.json\Z')
 PIPELINE = ('claim', 'worktree', 'bootstrap', 'context', 'debate', 'plan', 'plan_gate',
             'task', 'task_validation', 'task_gate', 'repair', 'task_commit',
             'full_validation', 'pr_prepare', 'pr_publish', 'ci', 'merge_gate', 'merge', 'issue_close')
-ASSETS = {}  # Added by the Dashboard UI; never serve arbitrary checkout/state files.
+ASSETS = {
+    '/': ('index.html', 'text/html; charset=utf-8'),
+    '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+    '/style.css': ('style.css', 'text/css; charset=utf-8'),
+}  # Fixed manifest; never serve arbitrary checkout/state files.
 
 
 def run_identity(value):
@@ -153,7 +157,8 @@ class Reader:
         queue_records = [e for e in all_events if e['stage'] == 'queue' and 'queue_issues' in e['details']]
         latest_queue = queue_records[-1] if queue_records else None
         queue_age = age(latest_queue['timestamp'], now) if latest_queue else None
-        queue = dict(issues=latest_queue['details'].get('queue_issues', []) if latest_queue else [],
+        queue = dict(repository=latest_queue['repository'] if latest_queue else None,
+            issues=latest_queue['details'].get('queue_issues', []) if latest_queue else [],
             observed_count=latest_queue['details'].get('observed_count') if latest_queue else None,
             limit=latest_queue['details'].get('queue_limit') if latest_queue else None,
             total_known=False, timestamp=latest_queue['timestamp'] if latest_queue else None,

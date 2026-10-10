@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Gateway · Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">G</span><div>Agent Gateway<small>PIPELINE OBSERVATORY</small></div></div>
+    <div class="top-meta"><span class="readonly">◈ Read only</span><span>127.0.0.1</span></div>
+  </header>
+  <div class="notice" id="connection" role="status" aria-live="polite">Connecting to local observer…</div>
+  <main>
+    <section class="page-heading"><div><p class="eyebrow">LOCAL EXECUTION HISTORY</p><h1>Pipeline dashboard</h1><p>Follow the evidence, gates, and handoffs of each run.</p></div><div class="observed"><span id="last-poll">No API observation yet</span><small>Polling every 5 seconds · no GitHub requests</small></div></section>
+    <section class="metrics" aria-label="Observer overview">
+      <article class="metric"><span>WORKER HEALTH</span><strong id="worker-health">Unknown</strong><small id="worker-detail">PID is not proof of liveness</small></article>
+      <article class="metric"><span>QUEUE SNAPSHOT</span><strong id="queue-count">—</strong><small id="queue-freshness">No recorded snapshot</small></article>
+      <article class="metric"><span>RECORDED RUNS</span><strong id="run-count">0</strong><small>Bounded local history</small></article>
+      <article class="metric"><span>OBSERVATION QUALITY</span><strong id="quality">Unknown</strong><small id="quality-detail">Awaiting evidence</small></article>
+    </section>
+    <div class="workspace">
+      <aside class="sidebar">
+        <section class="panel"><div class="panel-heading"><h2>Runs</h2><span id="run-list-count" class="counter">0</span></div><p class="caption">Select a run to inspect its history.</p><div id="run-list" class="run-list"></div></section>
+        <section class="panel"><div class="panel-heading"><h2>Queue</h2><span class="tiny-label">SNAPSHOT</span></div><p class="caption" id="queue-note">History unavailable</p><div id="queue-list"></div></section>
+        <section class="panel" id="legacy-panel" hidden><h2>Legacy state</h2><p class="caption">Recorded state only. Stage and time unknown.</p><div id="legacy-list"></div></section>
+      </aside>
+      <div class="detail">
+        <section class="panel run-summary" id="run-summary"><p class="empty">No event history yet. Start an authorized worker separately, or use the documented synthetic demo.</p></section>
+        <section class="panel"><div class="panel-heading"><h2>Execution pipeline</h2><span class="tiny-label">OBSERVED STAGES</span></div><p class="caption">A recorded start does not establish current liveness. Missing evidence stays unknown.</p><div id="pipeline" class="pipeline"></div><p class="legend">✓ PASS / completed &nbsp; ! FAIL / ERROR / RISK &nbsp; … started / pending &nbsp; ↷ skipped &nbsp; ? unknown</p></section>
+        <section class="panel"><div class="panel-heading"><h2>Task progress</h2><span id="task-progress" class="counter">—</span></div><div id="tasks"></div></section>
+        <div class="detail-columns">
+          <section class="panel"><div class="panel-heading"><h2>PR &amp; required CI</h2><span class="tiny-label">EXACT IDENTITIES</span></div><div id="delivery"></div></section>
+          <section class="panel"><div class="panel-heading"><h2>Diagnostics</h2><span id="diagnostic-count" class="counter">0</span></div><div id="diagnostics"></div></section>
+        </div>
+      </div>
+    </div>
+    <footer>Read-only observation · no approval, retry, queue editing, merge, or shell controls.<br>Raw prompts, task criteria wording, configuration, private logs and paths are withheld.</footer>
+  </main>
+</body>
+</html>
