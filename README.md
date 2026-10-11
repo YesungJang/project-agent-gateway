@@ -1,5 +1,26 @@
 # Agent Gateway v0
 
+## Read-only Dashboard MVP
+
+The independent observer and lightweight browser UI run with Python standard library
+only, on `http://127.0.0.1:8765`:
+
+```sh
+python3 dashboard.py --state /absolute/path/gateway-state --port 8765
+```
+
+It never starts the worker, calls GitHub, exposes raw prompts/logs/configuration, or
+offers approval/retry/merge/shell controls. Existing state without event history is
+displayed with unknown stage/time. New history is recorded by the instrumented
+single-shot worker under its existing lock; viewing the UI does not activate it.
+
+See [local startup and operations](docs/dashboard-operations.md),
+[event history](docs/event-history.md), [worker observation](docs/worker-observation.md),
+[read-only API](docs/read-only-api.md), [browser UI and synthetic demo](docs/dashboard-ui.md),
+and [verification and remaining acceptance work](docs/dashboard-verification.md).
+The implementation PRs remain drafts pending independent Codex CLI and real-browser
+verification. macOS-specific behavior has not been verified in the cloud session.
+
 Python 3.12 の標準ライブラリのみ。GitHub Issue → Claude の計画 → Codex の Plan Gate → タスクごとの編集案・テスト・Codex Gate・修復 → 全体検証 → PR → 決定論的 Merge Gate。
 
 ## 実行
@@ -47,6 +68,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 
 - 新規 worktree の bootstrap 直後、実装前に `full_validation` を1回実行する（baseline）。失敗は `BootstrapFailure`（環境障害）で即 `approval-required`。計画・実装・修復に入らず、修復回数も消費しない。対象リポジトリが元から赤い状態を、エージェントの失敗と取り違えないため。
 - baseline が作業ツリー・index・HEAD を変更した場合も `BootstrapFailure` で停止する。
+- baseline は新しいステージを作らず、既存の `bootstrap` ステージとして観測する。失敗は `BOOTSTRAP_FAILED` として Dashboard の診断に出る。
 - 各検証コマンドについて `status`（実測）、`seconds`、`output_tail`（末尾15行・2000文字）を記録する。TASK verifier の `test_results` にはこの実測値を渡す。固定の `PASS` は渡さない。
 - 検証失敗時は出力末尾を例外メッセージに含める。修復時の Claude へのフィードバックと state の `task_feedback` に残り、`(see private logs)` だけで終わらない。
 - PR 本文に baseline と全体検証の実測結果（name / status / seconds）、タスクごとの検証結果、変更されたテストファイル一覧を載せる。`output_tail` は PR に載せず、private log と verifier のみに渡す。本文サイズと公開範囲を抑えるため。

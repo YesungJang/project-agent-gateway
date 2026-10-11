@@ -15,6 +15,8 @@ import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote
 
+from events import EventError, EventWriter
+
 
 class ApprovalRequired(RuntimeError):
     pass
@@ -434,6 +436,56 @@ class Gateway:
         self.audit = []
         self.job_data = {}
         self.last_log = None
+        self.observer = None
+        self.observation_failed = False
+        self.task_id = None
+        self.event_attempt = 0
+        self.event_state = 'unknown'
+        self.active_stage = None
+
+    def event(self, stage, outcome, **details):
+        """Best-effort observation; never influence gates or retry operations."""
+        if outcome == 'started' and stage not in ('worker', 'queue', 'claim', 'run', 'state'):
+            self.active_stage = stage
+        elif self.active_stage == stage and outcome != 'started':
+            self.active_stage = None
+        if getattr(self, 'observer', None) is None or self.observation_failed:
+            return
+        try:
+            self.observer.append(stage, outcome,
+                issue=None if stage in ('worker', 'queue') else details.get('issue_number', self.job),
+                task_id=self.task_id, attempt=self.event_attempt, **details)
+        except (OSError, EventError, ValueError, TypeError):
+            self.observation_failed = True
+            print('OBSERVATION_FAILED: history incomplete; execution gates unchanged.', file=sys.stderr)
+
+    @staticmethod
+    def observation_error(exc):
+        timeout = any(isinstance(cause, ApprovalRequired) and str(cause).startswith(
+            ('Timeout:', 'CI/mergeability wait timed out:')) for cause in (exc, exc.__cause__))
+        if isinstance(exc, GatePending):
+            return 'pending', None
+        if isinstance(exc, VerifierRisk):
+            return 'RISK', 'VERIFIER_RISK'
+        if isinstance(exc, BootstrapFailure):
+            return 'ERROR', 'TIMEOUT' if timeout else 'BOOTSTRAP_FAILED'
+        if isinstance(exc, VerificationFailure):
+            return 'ERROR', 'TIMEOUT' if timeout else 'VERIFIER_ERROR'
+        if isinstance(exc, ApprovalRequired):
+            return 'FAIL', 'TIMEOUT' if timeout else 'GATE_FAILED'
+        return 'ERROR', 'CRASH'
+
+    def observed_call(self, stage, function, *args, **kwargs):
+        self.event(stage, 'started')
+        try:
+            result = function(*args, **kwargs)
+        except BaseException as exc:
+            outcome, code = self.observation_error(exc)
+            self.event(stage, outcome, diagnostic_code=code)
+            raise
+        outcome = result.get('verdict', 'PASS') if isinstance(result, dict) else 'PASS'
+        self.event(stage, outcome if outcome in ('PASS', 'FAIL', 'ERROR', 'RISK') else 'unknown')
+        return result
 
     def run(self, argv, stdin=None, cwd=None):
         self.seq += 1
@@ -482,6 +534,10 @@ class Gateway:
             json.dumps({"issue": self.job, "state": state, **self.job_data}, indent=2)
         )
         tmp.replace(target)
+        self.event_state = state
+        self.event('state', state, mode=self.job_data.get('mode'), publish=self.publish,
+                   head=self.job_data.get('head'), base=self.job_data.get('base'),
+                   diagnostic_code='APPROVAL_REQUIRED' if state == 'approval-required' else None)
         if self.publish:
             args = ["issue", "edit", str(self.job)]
             for label in STATES:
@@ -717,6 +773,19 @@ class Gateway:
                     f"({argv[0]!r}): {exc}"
                 ) from exc
 
+    def baseline(self):
+        """Green before any edit, so a pre-existing failure is never read as agent work."""
+        fingerprint = self.fingerprint()
+        try:
+            results = self.tests(self.cfg["full_validation"])
+        except ApprovalRequired as exc:
+            raise BootstrapFailure(
+                f"Baseline validation failed before any edit: {exc}"
+            ) from exc
+        if fingerprint != self.fingerprint():
+            raise BootstrapFailure("Baseline validation modified the checkout")
+        return results
+
     def tests(self, names):
         if not names or any(x not in self.cfg["validation"] for x in names):
             raise ApprovalRequired("Unknown/empty test selection")
@@ -753,6 +822,7 @@ class Gateway:
                 "headRefOid,baseRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,files",
             )
         )
+        self.observe_ci(data, head, base)
         if (
             data["headRefOid"] != head
             or data["baseRefOid"] != base
@@ -797,13 +867,63 @@ class Gateway:
                 "Strict branch protection with enforced checks required"
             )
 
+    def observe_ci(self, data, head, base):
+        # This projection never contributes to the actual merge decision.
+        if getattr(self, 'observer', None) is None or self.observation_failed:
+            return
+        try:
+            self._observe_ci(data, head, base)
+        except (ValueError, TypeError, AttributeError, UnicodeError):
+            self.observation_failed = True
+            print('OBSERVATION_FAILED: CI metadata unavailable; gates unchanged.', file=sys.stderr)
+
+    def _observe_ci(self, data, head, base):
+        # Observe exact identities using the SAME deterministic CI contract.
+        checks = []
+        rollup = data.get('statusCheckRollup')
+        for check in rollup if isinstance(rollup, list) else []:
+            if not isinstance(check, dict):
+                continue
+            kind = check.get('__typename')
+            name = check.get('name' if kind == 'CheckRun' else 'context')
+            workflow = check.get('workflowName', '')
+            if not isinstance(name, str) or not isinstance(workflow, str):
+                continue
+            identifier = (f"check-run:{quote(workflow, safe='')}/{quote(name, safe='')}"
+                          if kind == 'CheckRun' else f"status-context:{quote(name, safe='')}"
+                          if kind == 'StatusContext' else None)
+            if identifier is None:
+                continue
+            try:
+                required_check_gate([check], [identifier])
+                outcome = 'PASS'
+            except GatePending:
+                outcome = 'pending'
+            except ApprovalRequired:
+                outcome = 'FAIL'
+            if identifier in self.cfg['required_checks']:
+                checks.append({'identifier': identifier, 'outcome': outcome})
+        for identifier in self.cfg['required_checks']:
+            if not any(c['identifier'] == identifier for c in checks):
+                checks.append({'identifier': identifier, 'outcome': 'pending'})
+        try:
+            required_check_gate(rollup, self.cfg['required_checks'])
+            outcome = 'PASS'
+        except GatePending:
+            outcome = 'pending'
+        except ApprovalRequired:
+            outcome = 'FAIL'
+        self.event('ci', outcome, checks=checks, head=head, base=base)
+
     def wait_merge_gate(self, pr, head, base):
         deadline = time.monotonic() + self.cfg.get("ci_wait_seconds", 300)
         while True:
             try:
-                self.merge_gate(pr, head, base)
+                self.observed_call('merge_gate', self.merge_gate, pr, head, base)
+                self.event('ci', 'PASS')
                 return
             except GatePending as exc:
+                self.event('ci', 'pending')
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ApprovalRequired(
@@ -815,7 +935,10 @@ class Gateway:
         feedback = []
         plan = None
         for attempt in range(self.cfg.get("plan_repair_attempts", 2) + 1):
-            plan = self.claude(
+            self.event_attempt = attempt + 1
+            if attempt:
+                self.event('repair', 'started', phase='PLAN', repair_count=attempt)
+            plan = self.observed_call('plan', self.claude,
                 {**context, "stage": (
                     "Plan sequential tasks covering all requirements. For a trivial "
                     "documentation/config-only issue, prefer 1 task. For a small localized "
@@ -840,10 +963,11 @@ class Gateway:
             if not valid:
                 verdict = {"verdict": "FAIL", "reasons": ["Invalid task plan: provide 1..12 tasks with title, nonempty criteria, and configured test names."]}
             elif mode == "FAST":
+                self.event('plan_gate', 'skipped', phase='PLAN', mode=mode)
                 return plan
             else:
                 try:
-                    verdict = self.verify({**context, "plan": plan, "verification_phase": "PLAN"})
+                    verdict = self.observed_call('plan_gate', self.verify, {**context, "plan": plan, "verification_phase": "PLAN"})
                     if verdict["verdict"] == "ERROR":
                         raise VerificationFailure("Verifier context/infrastructure failure: " + "; ".join(verdict["reasons"]))
                 except (VerificationFailure, VerifierRisk) as exc:
@@ -853,6 +977,9 @@ class Gateway:
                               reason=str(exc))
                     raise
             self.save("running", plan_gate=verdict["verdict"], plan_attempts=attempt + 1, plan_feedback=verdict["reasons"])
+            self.event('plan_gate', verdict['verdict'], phase='PLAN')
+            if attempt:
+                self.event('repair', verdict['verdict'], phase='PLAN', repair_count=attempt)
             if verdict["verdict"] == "PASS":
                 return plan
             feedback = verdict["reasons"]
@@ -862,9 +989,12 @@ class Gateway:
         self.job = issue["number"]
         self.job_data = {}
         self.audit = []
+        self.event_state = 'unknown'
         base = None
         try:
+            self.event('run', 'started', mode=self.cfg.get('mode', 'NORMAL'), publish=self.publish)
             self.save("running", mode=self.cfg.get("mode", "NORMAL"))
+            self.event('worktree', 'started')
             if self.git("status", "--porcelain"):
                 raise ApprovalRequired("Target checkout is dirty")
             # Refuse local repos with a remote different from the configured queue.
@@ -883,21 +1013,13 @@ class Gateway:
             self.git("worktree", "add", "-b", branch, str(worktree), base)
             self.cwd = worktree
             self.save("running", worktree=str(worktree), base=base, branch=branch)
+            self.event('worktree', 'PASS', base=base)
             # Once per new worktree, outside all planning/task repair loops.
-            self.bootstrap()
-            # Green before any edit, so a pre-existing failure is never read as agent work.
-            fingerprint = self.fingerprint()
-            try:
-                baseline = self.tests(self.cfg["full_validation"])
-            except ApprovalRequired as exc:
-                raise BootstrapFailure(
-                    f"Baseline validation failed before any edit: {exc}"
-                ) from exc
-            if fingerprint != self.fingerprint():
-                raise BootstrapFailure("Baseline validation modified the checkout")
+            self.observed_call('bootstrap', self.bootstrap)
+            baseline = self.observed_call('bootstrap', self.baseline)
             self.save("running", baseline=brief(baseline))
             try:
-                sources = self.read_context()
+                sources = self.observed_call('context', self.read_context)
             except VerificationFailure as exc:
                 self.save("running", plan_gate="ERROR", plan_attempts=0, plan_feedback=[str(exc)])
                 raise
@@ -913,7 +1035,7 @@ class Gateway:
             mode = self.cfg.get("mode", "NORMAL")
             if mode == "DEBATE":
                 try:
-                    context["independent_critique"] = self.verify(
+                    context["independent_critique"] = self.observed_call('debate', self.verify,
                         {**context, "stage": "requirements critique", "verification_phase": "PLAN"}
                     )
                 except (VerificationFailure, VerifierRisk) as exc:
@@ -925,11 +1047,18 @@ class Gateway:
             plan = self.plan_gate(context, mode)
             tasks = plan["tasks"]
             self.save("running", plan=plan, completed_tasks=[])
-            for task in tasks:
+            self.event('plan', 'PASS', task_count=len(tasks))
+            for task_index, task in enumerate(tasks, 1):
+                self.task_id = f'task-{task_index}'
+                self.event_attempt = 0
+                self.event('task', 'started', criteria_count=len(task['criteria']))
                 start = self.git("rev-parse", "HEAD")
                 feedback = []
                 for attempt in range(self.cfg.get("repair_attempts", 2) + 1):
-                    result = self.claude(
+                    self.event_attempt = attempt + 1
+                    if attempt:
+                        self.event('repair', 'started', phase='TASK', repair_count=attempt)
+                    result = self.observed_call('task', self.claude,
                         {
                             **context,
                             "task": task,
@@ -938,7 +1067,7 @@ class Gateway:
                         },
                         EDIT_SCHEMA,
                     )
-                    self.apply(result)
+                    self.observed_call('task', self.apply, result)
                     names = self.changed(base)
                     if names:
                         self.git("add", "--", *names)
@@ -951,15 +1080,18 @@ class Gateway:
                             if target.exists():
                                 current_sources[name] = target.read_text()
                         self.repository_manifest["copied"] = sorted(current_sources)
-                        task_results = self.tests(task["tests"])
+                        task_results = self.observed_call(
+                            'task_validation', self.tests, task["tests"]
+                        )
                         if fingerprint != self.fingerprint():
+                            self.event('task_validation', 'FAIL', diagnostic_code='GATE_FAILED')
                             raise ApprovalRequired(
                                 "Test modified source, index, or HEAD"
                             )
                         verdict = (
                             {"verdict": "PASS", "reasons": []}
                             if mode == "FAST"
-                            else self.verify(
+                            else self.observed_call('task_gate', self.verify,
                                 {
                                     "verification_phase": "TASK",
                                     "issue": context["issue"],
@@ -986,11 +1118,15 @@ class Gateway:
                     except ApprovalRequired as exc:
                         verdict = {"verdict": "FAIL", "reasons": [str(exc)]}
                     if fingerprint != self.fingerprint():
+                        self.event('task_gate', 'ERROR', diagnostic_code='GATE_FAILED')
                         raise ApprovalRequired(
                             "Test/verifier modified source, index, or HEAD"
                         )
                     self.save("running", task_gate=verdict["verdict"], task_attempts=attempt + 1,
                               task_feedback=verdict["reasons"])
+                    self.event('task_gate', 'skipped' if mode == 'FAST' else verdict['verdict'], phase='TASK', mode=mode)
+                    if attempt:
+                        self.event('repair', verdict['verdict'], phase='TASK', repair_count=attempt)
                     if verdict["verdict"] == "PASS":
                         context["repository_manifest"] = self.repository_manifest
                         for name in names:
@@ -1008,7 +1144,7 @@ class Gateway:
                 if names:
                     self.git("add", "--", *names)
                 if self.git("diff", "--cached", "--name-only"):
-                    self.git("commit", "-m", task["title"])
+                    self.observed_call('task_commit', self.git, "commit", "-m", task["title"])
                 self.job_data["completed_tasks"].append(
                     {
                         "title": task["title"],
@@ -1019,9 +1155,13 @@ class Gateway:
                     }
                 )
                 self.save("running")
+                self.event('task', 'done', criteria_count=len(task['criteria']))
+            self.task_id = None
+            self.event_attempt = 0
             self.changed(base)
             before = self.git("rev-parse", "HEAD")
             fingerprint = self.fingerprint()
+            self.event('full_validation', 'started')
             full_results = self.tests(self.cfg["full_validation"])
             if fingerprint != self.fingerprint():
                 raise ApprovalRequired("Full validation modified source/index/HEAD")
@@ -1030,9 +1170,11 @@ class Gateway:
                 or self.git("rev-parse", "HEAD") != before
             ):
                 raise ApprovalRequired("Validation modified the checkout")
+            self.event('full_validation', 'PASS')
             if before == base:
                 raise ApprovalRequired("No changes produced")
             body = worktree.parent / f"pr-{self.job}.md"
+            self.event('pr_prepare', 'started', head=before, base=base, publish=self.publish)
             # ponytail: name heuristic, not a coverage measure; replace if it misleads.
             changed_files = self.git("diff", "--name-only", base, before).split()
             tests_changed = [
@@ -1068,7 +1210,12 @@ class Gateway:
                     worktree=str(worktree),
                     audit=str(body),
                 )
+                self.event('pr_prepare', 'pr-ready', head=before, base=base, publish=False)
+                for stage in ('pr_publish', 'ci', 'merge_gate', 'merge', 'issue_close'):
+                    self.event(stage, 'skipped', publish=False)
                 return
+            self.event('pr_prepare', 'PASS', head=before, base=base, publish=True)
+            self.event('pr_publish', 'started', head=before, base=base)
             self.git("push", "--no-verify", "origin", f"HEAD:refs/heads/{branch}")
             pr = self.gh(
                 "pr",
@@ -1083,16 +1230,27 @@ class Gateway:
                 str(body),
             ).strip()
             self.save("pr-ready", pr=pr, head=before, base=base)
+            # PR URL is reconstructed from its numeric ID, never copied from output.
+            self.event('pr_publish', 'PASS', head=before, base=base,
+                       pr_number=int(pr.rsplit('/', 1)[-1]) if re.fullmatch(r'https://github.com/' + re.escape(expected) + r'/pull/[1-9][0-9]{0,15}', pr) else None)
             if mode == "FAST":
+                for stage in ('ci', 'merge_gate', 'merge', 'issue_close'):
+                    self.event(stage, 'skipped', mode='FAST')
                 return
             self.wait_merge_gate(pr, before, base)
+            self.event('merge', 'started', head=before)
             self.gh("pr", "merge", pr, "--squash", "--match-head-commit", before)
             merged = json.loads(self.gh("pr", "view", pr, "--json", "state,headRefOid"))
             if merged != {"state": "MERGED", "headRefOid": before}:
                 raise ApprovalRequired("Merge not confirmed")
-            self.gh("issue", "close", str(self.job))
+            self.event('merge', 'PASS', merged=True, head=before)
+            self.observed_call('issue_close', self.gh, "issue", "close", str(self.job))
             self.save("done", pr=pr, head=before)
         except Exception as exc:
+            outcome, code = self.observation_error(exc)
+            if self.active_stage is not None:
+                self.event(self.active_stage, outcome, diagnostic_code=code)
+            self.event('run', outcome, diagnostic_code=code)
             try:
                 self.save(
                     "approval-required",
@@ -1104,13 +1262,29 @@ class Gateway:
                 print(f"Remote state update failed: {label_error}", file=sys.stderr)
             raise
         finally:
+            self.event('run', self.event_state)
             self.cwd = self.repo
             self.session = None
+            self.task_id = None
+            self.event_attempt = 0
 
     def once(self):
         lock = (self.state / "worker.lock").open("a")
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print('WORKER_LOCK_CONTENDED: worker did not start; no pipeline events written.', file=sys.stderr)
+                raise
+            self.observation_failed = False
+            try:
+                self.observer = EventWriter(self.state, self.cfg['github_repo'], lock.fileno())
+            except (OSError, EventError):
+                self.observer = None
+                self.observation_failed = True
+                print('OBSERVATION_FAILED: history unavailable; execution gates unchanged.', file=sys.stderr)
+            self.event('worker', 'started', pid=os.getpid(), publish=self.publish, mode=self.cfg.get('mode', 'NORMAL'))
+            self.event('queue', 'started')
             issues = json.loads(
                 self.gh(
                     "issue",
@@ -1125,6 +1299,8 @@ class Gateway:
                     "number,title,body,labels",
                 )
             )
+            self.event('queue', 'PASS', queue_issues=[i['number'] for i in issues],
+                       observed_count=len(issues), queue_limit=100, queue_total_known=False)
             for issue in sorted(issues, key=lambda x: x["number"]):
                 if any(
                     x["name"] in {"gateway:" + s for s in STATES}
@@ -1133,10 +1309,23 @@ class Gateway:
                     continue
                 if (self.state / f"issue-{issue['number']}.json").exists():
                     continue  # Crash/retry requires explicit operator review, no automatic duplicate jobs.
-                self.process(issue)
+                self.event('claim', 'started', issue_number=issue['number'])
+                self.observed_call('claim', self.process, issue)
                 return True
+            self.event('worker', 'idle')
             return False
+        except BaseException as exc:
+            outcome, code = self.observation_error(exc)
+            self.event('worker', outcome, diagnostic_code=code)
+            raise
         finally:
+            self.event('worker', 'exited')
+            if self.observer is not None:
+                try:
+                    self.observer.close()
+                except OSError:
+                    print('OBSERVATION_FAILED: observer close failed; gates unchanged.', file=sys.stderr)
+                self.observer = None
             lock.close()
 
 
