@@ -78,10 +78,12 @@ class LocalGateway(gateway.Gateway):
         if "plan" in payload and self.fail_plan:
             return {"verdict": "FAIL", "reasons": ["Missing criterion"]}
         if "diff" in payload:
-            assert payload["test_results"] == [
-                {"name": name, "argv": self.cfg["validation"][name], "status": "PASS"}
-                for name in payload["tests"]
-            ]
+            assert [x["name"] for x in payload["test_results"]] == payload["tests"]
+            for result in payload["test_results"]:
+                assert result["argv"] == self.cfg["validation"][result["name"]]
+                assert result["status"] == "PASS"
+                assert isinstance(result["seconds"], float)
+                assert "output_tail" in result
             assert "def greet" in payload["diff"], (
                 "New file must appear in verified diff"
             )
@@ -247,7 +249,11 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse((Path(state["worktree"]) / "src/greeting.py").exists())
 
     def test_full_validation_failure_stops_before_publish(self):
-        self.cfg["validation"]["full"] = ["python3", "-c", "raise SystemExit(1)"]
+        self.cfg["validation"]["full"] = [
+            "python3",
+            "-c",
+            'import pathlib, sys; sys.exit(pathlib.Path("src/greeting.py").exists())',
+        ]
         self.cfg["full_validation"] = ["full"]
         w = self.worker()
         with self.assertRaises(gateway.ApprovalRequired):
@@ -262,11 +268,87 @@ class GatewayTests(unittest.TestCase):
         self.cfg["validation"]["unit"] = [
             "python3",
             "-c",
-            'from pathlib import Path; Path("src/greeting.py").write_text("changed")',
+            (
+                'from pathlib import Path; p = Path("src/greeting.py");'
+                ' p.exists() and p.write_text("changed")'
+            ),
         ]
         w = self.worker()
         with self.assertRaisesRegex(gateway.ApprovalRequired, "modified"):
             w.once()
+
+    def test_baseline_proves_target_was_green_before_any_edit(self):
+        self.cfg["validation"]["unit"] = ["python3", "-c", "raise SystemExit(1)"]
+        w = self.worker()
+        with (
+            patch.object(w, "claude") as claude,
+            patch.object(w, "verify") as verify,
+            self.assertRaisesRegex(
+                gateway.BootstrapFailure, "Baseline validation failed before any edit"
+            ),
+        ):
+            w.process({"number": 1, "title": "test", "body": ""})
+        claude.assert_not_called()
+        verify.assert_not_called()
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "approval-required")
+        self.assertNotIn("completed_tasks", state)
+        self.assertFalse((Path(state["worktree"]) / "src/greeting.py").exists())
+
+    def test_baseline_rejects_validation_that_modifies_the_checkout(self):
+        self.cfg["validation"]["unit"] = [
+            "python3",
+            "-c",
+            'from pathlib import Path; Path("docs/readme.md").write_text("changed")',
+        ]
+        w = self.worker()
+        with (
+            patch.object(w, "claude") as claude,
+            self.assertRaisesRegex(
+                gateway.BootstrapFailure, "Baseline validation modified the checkout"
+            ),
+        ):
+            w.process({"number": 1, "title": "test", "body": ""})
+        claude.assert_not_called()
+
+    def test_measured_results_recorded_for_baseline_tasks_and_pull_request(self):
+        w = self.worker()
+        self.assertTrue(w.once())
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["baseline"], [{"name": "unit", "status": "PASS",
+                                              "seconds": state["baseline"][0]["seconds"]}])
+        self.assertIsInstance(state["baseline"][0]["seconds"], float)
+        self.assertEqual(
+            [x["status"] for x in state["completed_tasks"][0]["test_results"]], ["PASS"]
+        )
+        body = Path(state["audit"]).read_text()
+        self.assertIn("Baseline before any edit: unit PASS", body)
+        self.assertIn("Full validation after changes: unit PASS", body)
+        self.assertIn("Test files changed: none", body)
+        record = json.loads(body.split("```json\n")[1].split("\n```")[0])
+        self.assertEqual(record["tests_changed"], [])
+        self.assertEqual([x["status"] for x in record["full_validation_results"]], ["PASS"])
+        self.assertNotIn("output_tail", record["baseline"][0])
+
+    def test_failed_validation_output_reaches_repair_and_operator(self):
+        self.cfg["validation"]["unit"] = [
+            "python3",
+            "-c",
+            (
+                "from pathlib import Path; import sys;"
+                ' sys.exit(sys.stderr.write("greeting assertion exploded") and 1'
+                ' if Path("src/greeting.py").exists() else 0)'
+            ),
+        ]
+        w = self.worker()
+        with self.assertRaises(gateway.ApprovalRequired):
+            w.once()
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "approval-required")
+        self.assertTrue(
+            any("greeting assertion exploded" in x for x in state["task_feedback"]),
+            state["task_feedback"],
+        )
 
     def test_risk_and_escape_policy(self):
         for name in [
