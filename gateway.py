@@ -208,6 +208,22 @@ def check_context_path(name):
         raise ApprovalRequired(f"Denied context path: {name!r}")
 
 
+def output_tail(entry, lines=15, limit=2000):
+    """Last lines a human or verifier needs; full output stays in private logs."""
+    if not entry:
+        return ""
+    text = (entry.get("stdout") or "") + (entry.get("stderr") or "")
+    return "\n".join(text[-limit:].splitlines()[-lines:])
+
+
+def summarize(results):
+    return ", ".join(f"{r['name']} {r['status']} {r['seconds']}s" for r in results) or "none"
+
+
+def brief(results):
+    return [{k: r[k] for k in ("name", "status", "seconds")} for r in results]
+
+
 def risky(name, protected=()):
     """Conservative built-in policy; configured protections can only add paths."""
     low = name.lower()
@@ -417,6 +433,7 @@ class Gateway:
         self.seq = 0
         self.audit = []
         self.job_data = {}
+        self.last_log = None
 
     def run(self, argv, stdin=None, cwd=None):
         self.seq += 1
@@ -445,6 +462,7 @@ class Gateway:
 
     def log(self, argv, out, err, status):
         entry = {"argv": argv, "status": status, "stdout": out, "stderr": err}
+        self.last_log = entry
         (
             self.state / f"{self.job or 'queue'}-{self.seq}-{time.time_ns()}.json"
         ).write_text(json.dumps(entry, indent=2))
@@ -702,8 +720,28 @@ class Gateway:
     def tests(self, names):
         if not names or any(x not in self.cfg["validation"] for x in names):
             raise ApprovalRequired("Unknown/empty test selection")
+        results = []
         for name in names:
-            self.run(self.cfg["validation"][name])
+            argv = self.cfg["validation"][name]
+            started = time.monotonic()
+            failure = None
+            try:
+                self.run(argv)
+            except ApprovalRequired as exc:
+                failure = exc
+            results.append({
+                "name": name,
+                "argv": argv,
+                "status": "FAIL" if failure else "PASS",
+                "seconds": round(time.monotonic() - started, 1),
+                "output_tail": output_tail(self.last_log),
+            })
+            if failure:
+                # Repair and operators get the observed output, not a log path.
+                raise ApprovalRequired(
+                    f"{failure}\n{results[-1]['output_tail']}"
+                ) from failure
+        return results
 
     def merge_gate(self, pr, head, base):
         data = json.loads(
@@ -847,6 +885,17 @@ class Gateway:
             self.save("running", worktree=str(worktree), base=base, branch=branch)
             # Once per new worktree, outside all planning/task repair loops.
             self.bootstrap()
+            # Green before any edit, so a pre-existing failure is never read as agent work.
+            fingerprint = self.fingerprint()
+            try:
+                baseline = self.tests(self.cfg["full_validation"])
+            except ApprovalRequired as exc:
+                raise BootstrapFailure(
+                    f"Baseline validation failed before any edit: {exc}"
+                ) from exc
+            if fingerprint != self.fingerprint():
+                raise BootstrapFailure("Baseline validation modified the checkout")
+            self.save("running", baseline=brief(baseline))
             try:
                 sources = self.read_context()
             except VerificationFailure as exc:
@@ -902,7 +951,7 @@ class Gateway:
                             if target.exists():
                                 current_sources[name] = target.read_text()
                         self.repository_manifest["copied"] = sorted(current_sources)
-                        self.tests(task["tests"])
+                        task_results = self.tests(task["tests"])
                         if fingerprint != self.fingerprint():
                             raise ApprovalRequired(
                                 "Test modified source, index, or HEAD"
@@ -924,11 +973,7 @@ class Gateway:
                                         "ls-files", "--others", "--exclude-standard"
                                     ),
                                     "tests": task["tests"],
-                                    "test_results": [
-                                        {"name": name, "argv": self.cfg["validation"][name],
-                                         "status": "PASS"}
-                                        for name in task["tests"]
-                                    ],
+                                    "test_results": task_results,
                                 }
                             )
                         )
@@ -969,6 +1014,7 @@ class Gateway:
                         "title": task["title"],
                         "head": self.git("rev-parse", "HEAD"),
                         "tests": task["tests"],
+                        "test_results": brief(task_results),
                         "attempts": attempt + 1,
                     }
                 )
@@ -976,7 +1022,7 @@ class Gateway:
             self.changed(base)
             before = self.git("rev-parse", "HEAD")
             fingerprint = self.fingerprint()
-            self.tests(self.cfg["full_validation"])
+            full_results = self.tests(self.cfg["full_validation"])
             if fingerprint != self.fingerprint():
                 raise ApprovalRequired("Full validation modified source/index/HEAD")
             if (
@@ -987,14 +1033,25 @@ class Gateway:
             if before == base:
                 raise ApprovalRequired("No changes produced")
             body = worktree.parent / f"pr-{self.job}.md"
+            # ponytail: name heuristic, not a coverage measure; replace if it misleads.
+            changed_files = self.git("diff", "--name-only", base, before).split()
+            tests_changed = [
+                x for x in changed_files if "test" in x.lower() or "spec" in x.lower()
+            ]
             body.write_text(
                 f"Implements issue #{self.job}.\n\nMode: {mode}\n\n"
-                + "Task gates and configured full validation passed.\n\n"
+                + f"Baseline before any edit: {summarize(baseline)}\n"
+                + f"Full validation after changes: {summarize(full_results)}\n"
+                + f"Test files changed: {', '.join(tests_changed) or 'none'}\n\n"
                 + "```json\n"
                 + json.dumps(
                     {
                         "plan": plan,
                         "validation": self.cfg["full_validation"],
+                        "baseline": brief(baseline),
+                        "full_validation_results": brief(full_results),
+                        "tasks": self.job_data["completed_tasks"],
+                        "tests_changed": tests_changed,
                         "head": before,
                         "base": base,
                         "audit": self.audit,

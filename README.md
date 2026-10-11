@@ -41,6 +41,18 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - bootstrap は検証コマンドと同様にローカルの信頼済みコードを実行する。管理者は依存の install scripts を含む実行内容を確認し、秘密の読み取り・外部送信を許可するコマンドを無断で設定しない。生成物は対象リポジトリの既存の ignore 設定に従う。Gateway が ignore や許可パスを自動追加することはなく、追跡ファイルや ignore されない生成物への変更には既存の編集・差分・merge gates が適用される。
 - 失敗時も worktree とログを保持する。既存どおり自動再開はせず、管理者が設定・環境と残った worktree を調査する。
 
+## 検証結果の記録
+
+結果は AI の申告ではなく Gateway が観測した事実として記録する。
+
+- 新規 worktree の bootstrap 直後、実装前に `full_validation` を1回実行する（baseline）。失敗は `BootstrapFailure`（環境障害）で即 `approval-required`。計画・実装・修復に入らず、修復回数も消費しない。対象リポジトリが元から赤い状態を、エージェントの失敗と取り違えないため。
+- baseline が作業ツリー・index・HEAD を変更した場合も `BootstrapFailure` で停止する。
+- 各検証コマンドについて `status`（実測）、`seconds`、`output_tail`（末尾15行・2000文字）を記録する。TASK verifier の `test_results` にはこの実測値を渡す。固定の `PASS` は渡さない。
+- 検証失敗時は出力末尾を例外メッセージに含める。修復時の Claude へのフィードバックと state の `task_feedback` に残り、`(see private logs)` だけで終わらない。
+- PR 本文に baseline と全体検証の実測結果（name / status / seconds）、タスクごとの検証結果、変更されたテストファイル一覧を載せる。`output_tail` は PR に載せず、private log と verifier のみに渡す。本文サイズと公開範囲を抑えるため。
+- `tests_changed` はパスに `test` / `spec` を含むかどうかのヒューリスティックで、カバレッジの指標ではない。テスト変更がなくても停止はせず、事実として表示する。
+- `output_tail` は検証コマンドの出力であり、verifier（外部サービス）と PR 本文経由ではない private log に渡る。出力に秘密を含むコマンドを `validation` に設定しない。
+
 ## 安全と状態
 
 - Issue は JSON のデータとして stdin に渡す。シェルは使わず、検証コマンドは設定の argv 配列だけから選択する。ただし検証コマンド自体がコードを実行するため、対象リポジトリとそのテストは事前に信頼・確認が必要。
@@ -53,7 +65,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
 - 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、必須 CI 成功、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
 - 必須 CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
-- PR は計画・検証コマンド・head/base・実行結果の監査記録。Issue を自動 close する参照形式は使わず、マージ確認後のみ close。
+- PR は計画・検証コマンド・head/base・実測の検証結果の監査記録。Issue を自動 close する参照形式は使わず、マージ確認後のみ close。
 - state は mode 0700 推奨。ログは umask 077 で作成し、エージェント出力を含む。PR に載る情報を確認し、機密 Issue を投入しない。
 - crash や停止後は state に残る Issue を自動再実行しない。人が worktree、PR、state を調査する。worktree/ログは削除せず保持する。
 
