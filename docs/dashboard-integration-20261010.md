@@ -1,5 +1,9 @@
 # Dashboard stack integration — 2026-10-10
 
+> **Superseded — 2026-10-10.** PRs #6–#10 were merged into `main`; the per-PR
+> hold/readiness assessments below are historical. Live-service execution and
+> Codex independent review remain outstanding. Kept as the audit record.
+
 This follow-up reviewed existing PRs #6–#10 without repeating their completed
 implementation or earlier synthetic browser acceptance work. No PR was merged.
 

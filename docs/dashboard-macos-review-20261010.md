@@ -1,5 +1,9 @@
 # Independent macOS Dashboard review — 2026-10-10
 
+> **Superseded — 2026-10-10.** PRs #6–#10 were merged into `main`; the per-PR
+> hold/readiness assessments below are historical. Live-service execution and
+> Codex independent review remain outstanding. Kept as the audit record.
+
 Reviewed remote final head `e58e450d043aacbfb1f9ff5c79bbc7d34e72e0e8`
 against `main` `026f95e04f934dd680652a6c9c99b3253dbe01e0`, in a separate
 `review/dashboard-mvp-20261010` worktree. Runtime: macOS/Darwin,

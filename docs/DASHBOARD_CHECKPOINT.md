@@ -1,5 +1,9 @@
 # Durable Dashboard checkpoint — 2026-10-09
 
+> **Superseded — 2026-10-10.** PRs #6–#10 were merged into `main`; the per-PR
+> hold/readiness assessments below are historical. Live-service execution and
+> Codex independent review remain outstanding. Kept as the audit record.
+
 Repository: `YesungJang/project-agent-gateway` (private).
 Cloud checkout: `/workspace/scratch/5ebc9ca5dd38/agent-gateway` (transient).
 The durable source of truth is the GitHub branch stack and this committed record.
