@@ -79,7 +79,7 @@ function renderRun() {
   if(run.quality!=='observed')notes.push(node('p','History incomplete: '+run.problems.join(', ')+'. Completion is unknown.','warning-text'));
   if(!run.ended_at)notes.push(node('p','This run has no observed end. Worker liveness is unknown; a crash or interrupted observation is possible.','warning-text'));
   replace('run-summary',heading,repo,meta,...notes);
-  replace('pipeline',...groups.map(([title,stages])=>{const group=node('div',undefined,'stage-group');group.append(node('h3',title));for(const [key,label] of stages){const status=run.stages[key]?.outcome||'unknown';const card=node('div',undefined,'stage-node '+(Object.hasOwn(icons,status)?status:'unknown')+(key==='repair'?' repair-loop':''));card.append(node('strong',label),badge(status));group.append(card);}return group;}));
+  replace('pipeline',...groups.map(([title,stages])=>{const group=node('div',undefined,'stage-group');group.append(node('h3',title));for(const [key,label] of stages){const status=run.stages[key]?.outcome||'unknown';const card=node('div',undefined,'stage-node '+(Object.hasOwn(icons,status)?status:'unknown')+(key==='repair'?' repair-loop':''));card.append(node('strong',label),badge(status));const measured=run.stages[key]?.validation;if(measured?.length)card.append(node('small',measured.map(v=>v.name+' '+v.status+' '+v.seconds+'s').join(' · '),'stage-measure'));group.append(card);}return group;}));
   const done=run.tasks.filter(t=>t.status==='done').length;
   byId('task-progress').textContent=done+' / '+run.tasks.length+' completed';
   const track=node('div',undefined,'progress-track'),fill=node('div',undefined,'progress-fill');

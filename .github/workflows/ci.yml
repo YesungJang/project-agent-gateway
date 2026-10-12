@@ -34,5 +34,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # dashboard.py, events.py and tests/ carry pre-existing findings tracked separately.
-      - run: pipx run ruff check gateway.py
+      # tests/ still carries pre-existing B023/SIM117 findings, tracked separately.
+      - run: pipx run ruff check gateway.py dashboard.py events.py demo_dashboard.py

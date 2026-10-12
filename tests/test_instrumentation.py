@@ -25,6 +25,22 @@ class InstrumentationTests(unittest.TestCase):
             records.extend(values)
         return records
 
+    def test_validation_events_carry_measurements_not_a_fixed_pass(self):
+        w = self.worker()
+        self.assertTrue(w.once())
+        measured = {e['stage']: e['details'].get('validation')
+                    for e in self.history()
+                    if e['stage'] in ('bootstrap', 'task_validation', 'full_validation')
+                    and e['outcome'] == 'PASS'}
+        self.assertEqual(sorted(measured), ['bootstrap', 'full_validation', 'task_validation'])
+        for stage, results in measured.items():
+            with self.subTest(stage=stage):
+                self.assertEqual([x['name'] for x in results], ['unit'], stage)
+                self.assertEqual(results[0]['status'], 'PASS')
+                self.assertIsInstance(results[0]['seconds'], float)
+                # Command output stays in the private logs, never in the event stream.
+                self.assertEqual(set(results[0]), {'name', 'status', 'seconds'})
+
     def test_normal_repair_dry_run_restart_and_no_prompt(self):
         w = self.worker(fail_task=True)
         self.assertTrue(w.once())

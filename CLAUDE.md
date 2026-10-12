@@ -8,10 +8,10 @@ main へのマージは事前承認済み。ただし**下の条件が全部揃�
 
 1. 全テストが緑。`mise exec -- python3 -m unittest discover -s tests` を実行し、件数と結果を報告する。
 2. 振る舞いを変えたなら、それを守る回帰テストがある。**追加したテストが変更前のコードで落ちることを確認済み**。落ちないテストは何も証明していない。
-3. Ruff の新規指摘ゼロ。`uvx ruff check gateway.py tests/`（`uv run --no-sync ruff` は使えない）。HEAD と件数を比較し、既存の B023 / SIM114 を超えないこと。gateway.py は常にゼロ。
+3. Ruff の新規指摘ゼロ。`uvx ruff check gateway.py dashboard.py events.py demo_dashboard.py` は常にゼロ（CI の lint ジョブと同じ）。`tests/` は既存の B023 / SIM117 を超えないことだけ確認する。`uv run --no-sync ruff` は使えない。
 4. `git diff --check` 成功。
 5. 挙動を変えたなら README.md も更新済み。README は仕様書として実装と一致させる契約。
-6. `work/LOG.md` に3行追記（日付 / 変更 / 検証 / 影響範囲）。work/ は gitignore なのでコミットには入らない。
+6. `docs/WORK_LOG.md` に3行追記（日付 / 変更 / 検証 / 影響範囲）。コミット対象。clone した人に見えない `work/LOG.md` は使わない。
 7. 作業ツリーがクリーンで、**マージ後にもう一度テストが緑**。マージコミット自体を未検証のまま残さない。
 8. main から直接コミットせず、ブランチを切って 1コミット1意図、`--no-ff` でマージ。マージ後にブランチを削除する。
 

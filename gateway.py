@@ -475,7 +475,7 @@ class Gateway:
             return 'FAIL', 'TIMEOUT' if timeout else 'GATE_FAILED'
         return 'ERROR', 'CRASH'
 
-    def observed_call(self, stage, function, *args, **kwargs):
+    def observed_call(self, stage, function, *args, detail=None, **kwargs):
         self.event(stage, 'started')
         try:
             result = function(*args, **kwargs)
@@ -484,7 +484,8 @@ class Gateway:
             self.event(stage, outcome, diagnostic_code=code)
             raise
         outcome = result.get('verdict', 'PASS') if isinstance(result, dict) else 'PASS'
-        self.event(stage, outcome if outcome in ('PASS', 'FAIL', 'ERROR', 'RISK') else 'unknown')
+        self.event(stage, outcome if outcome in ('PASS', 'FAIL', 'ERROR', 'RISK') else 'unknown',
+                   **(detail(result) if detail else {}))
         return result
 
     def run(self, argv, stdin=None, cwd=None):
@@ -1016,7 +1017,10 @@ class Gateway:
             self.event('worktree', 'PASS', base=base)
             # Once per new worktree, outside all planning/task repair loops.
             self.observed_call('bootstrap', self.bootstrap)
-            baseline = self.observed_call('bootstrap', self.baseline)
+            baseline = self.observed_call(
+                'bootstrap', self.baseline,
+                detail=lambda results: {'validation': brief(results)},
+            )
             self.save("running", baseline=brief(baseline))
             try:
                 sources = self.observed_call('context', self.read_context)
@@ -1081,7 +1085,8 @@ class Gateway:
                                 current_sources[name] = target.read_text()
                         self.repository_manifest["copied"] = sorted(current_sources)
                         task_results = self.observed_call(
-                            'task_validation', self.tests, task["tests"]
+                            'task_validation', self.tests, task["tests"],
+                            detail=lambda results: {'validation': brief(results)},
                         )
                         if fingerprint != self.fingerprint():
                             self.event('task_validation', 'FAIL', diagnostic_code='GATE_FAILED')
@@ -1170,7 +1175,7 @@ class Gateway:
                 or self.git("rev-parse", "HEAD") != before
             ):
                 raise ApprovalRequired("Validation modified the checkout")
-            self.event('full_validation', 'PASS')
+            self.event('full_validation', 'PASS', validation=brief(full_results))
             if before == base:
                 raise ApprovalRequired("No changes produced")
             body = worktree.parent / f"pr-{self.job}.md"

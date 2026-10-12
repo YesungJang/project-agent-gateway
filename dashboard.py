@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from events import EventError, read_lines, utc_now
+from events import EventError, read_lines
 
 MAX_FILES = 64
 MAX_EVENTS = 10000
@@ -44,7 +44,7 @@ def run_identity(value):
 def age(timestamp, now):
     if timestamp is None:
         return None
-    return max(0, int((now - dt.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))).total_seconds()))
+    return max(0, int((now - dt.datetime.fromisoformat(timestamp)).total_seconds()))
 
 
 def entries(directory, pattern):
@@ -144,7 +144,7 @@ class Reader:
         return items, sorted(set(problems))
 
     def snapshot(self, now=None):
-        now = now or dt.datetime.now(dt.timezone.utc)
+        now = now or dt.datetime.now(dt.UTC)
         history, problems = self.history()
         views = []
         all_events = []
@@ -157,15 +157,15 @@ class Reader:
         queue_records = [e for e in all_events if e['stage'] == 'queue' and 'queue_issues' in e['details']]
         latest_queue = queue_records[-1] if queue_records else None
         queue_age = age(latest_queue['timestamp'], now) if latest_queue else None
-        queue = dict(repository=latest_queue['repository'] if latest_queue else None,
-            issues=latest_queue['details'].get('queue_issues', []) if latest_queue else [],
-            observed_count=latest_queue['details'].get('observed_count') if latest_queue else None,
-            limit=latest_queue['details'].get('queue_limit') if latest_queue else None,
-            total_known=False, timestamp=latest_queue['timestamp'] if latest_queue else None,
-            age_seconds=queue_age, freshness='unknown' if queue_age is None else
-            'stale' if queue_age > FRESH_SECONDS or problems else 'observed')
+        queue = {'repository': latest_queue['repository'] if latest_queue else None,
+            'issues': latest_queue['details'].get('queue_issues', []) if latest_queue else [],
+            'observed_count': latest_queue['details'].get('observed_count') if latest_queue else None,
+            'limit': latest_queue['details'].get('queue_limit') if latest_queue else None,
+            'total_known': False, 'timestamp': latest_queue['timestamp'] if latest_queue else None,
+            'age_seconds': queue_age, 'freshness': 'unknown' if queue_age is None else
+            'stale' if queue_age > FRESH_SECONDS or problems else 'observed'}
         worker_starts = [e for e in all_events if e['stage'] == 'worker' and e['outcome'] == 'started']
-        worker = dict(status='unknown', timestamp=None, age_seconds=None, pid_is_liveness=False)
+        worker = {'status': 'unknown', 'timestamp': None, 'age_seconds': None, 'pid_is_liveness': False}
         if worker_starts:
             last_start = worker_starts[-1]
             records, errors = history[last_start['run_id']]
@@ -182,21 +182,21 @@ class Reader:
         problems = sorted(set(problems + legacy_errors))
         digest = hashlib.sha256(json.dumps({'events': all_events, 'problems': problems,
                                           'legacy': legacy}, sort_keys=True).encode()).hexdigest()
-        return dict(version=1, generated_at=now.isoformat().replace('+00:00', 'Z'),
-            cursor=digest, quality='unknown' if problems else 'observed', problems=problems,
-            queue=queue, worker=worker, runs=views, legacy=legacy)
+        return {'version': 1, 'generated_at': now.isoformat().replace('+00:00', 'Z'),
+            'cursor': digest, 'quality': 'unknown' if problems else 'observed', 'problems': problems,
+            'queue': queue, 'worker': worker, 'runs': views, 'legacy': legacy}
 
     @staticmethod
     def project(identity, records, errors, now):
         stages = {stage: {'outcome': 'unknown', 'timestamp': None} for stage in PIPELINE}
         tasks, diagnostics, checks = {}, [], []
-        view = dict(id=identity, repository=None, issue=None, status='unknown', mode=None,
-            planned_tasks=None, plan_attempts=0, plan_repairs=0,
-            publish=None, started_at=None, updated_at=None, ended_at=None, current_stage='unknown',
-            stages=stages, tasks=[], diagnostics=diagnostics, ci=checks,
-            pr={'published': False, 'number': None, 'url': None, 'head': None,
-                'base': None, 'merge_confirmed': False}, quality='unknown' if errors else 'observed',
-            problems=errors)
+        view = {'id': identity, 'repository': None, 'issue': None, 'status': 'unknown', 'mode': None,
+            'planned_tasks': None, 'plan_attempts': 0, 'plan_repairs': 0,
+            'publish': None, 'started_at': None, 'updated_at': None, 'ended_at': None, 'current_stage': 'unknown',
+            'stages': stages, 'tasks': [], 'diagnostics': diagnostics, 'ci': checks,
+            'pr': {'published': False, 'number': None, 'url': None, 'head': None,
+                'base': None, 'merge_confirmed': False}, 'quality': 'unknown' if errors else 'observed',
+            'problems': errors}
         for event in records:
             stage, outcome, details = event['stage'], event['outcome'], event['details']
             view['repository'] = event['repository']
@@ -221,12 +221,14 @@ class Reader:
                 view['publish'] = details['publish']
             if stage in stages:
                 stages[stage] = {'outcome': outcome, 'timestamp': event['timestamp']}
+                if details.get('validation'):
+                    stages[stage]['validation'] = details['validation']
                 if stage != 'claim':  # claim spans the entire processing call.
                     view['current_stage'] = stage
             task_id = event['task_id']
             if task_id:
-                task = tasks.setdefault(task_id, dict(id=task_id, status='unknown', attempts=0,
-                    repairs=0, criteria_count=None, criteria_text='withheld', stages={}, diagnostics=[]))
+                task = tasks.setdefault(task_id, {'id': task_id, 'status': 'unknown', 'attempts': 0,
+                    'repairs': 0, 'criteria_count': None, 'criteria_text': 'withheld', 'stages': {}, 'diagnostics': []})
                 task['attempts'] = max(task['attempts'], event['attempt'])
                 if stage == 'repair' and details.get('phase') == 'TASK':
                     task['repairs'] = max(task['repairs'], details.get('repair_count', 0))
@@ -262,15 +264,15 @@ class Reader:
             view['status'] = 'unknown'
         for index in range(1, (view['planned_tasks'] or 0) + 1):
             task_id = f'task-{index}'
-            tasks.setdefault(task_id, dict(id=task_id, status='unknown', attempts=0,
-                repairs=0, criteria_count=None, criteria_text='withheld', stages={}, diagnostics=[]))
+            tasks.setdefault(task_id, {'id': task_id, 'status': 'unknown', 'attempts': 0,
+                'repairs': 0, 'criteria_count': None, 'criteria_text': 'withheld', 'stages': {}, 'diagnostics': []})
         view['tasks'] = sorted(tasks.values(), key=lambda t: int(t['id'][5:]))[:12]
         view['diagnostics'] = diagnostics[-100:]
         for task in view['tasks']:
             task['diagnostics'] = task['diagnostics'][-20:]
         view['age_seconds'] = age(view['updated_at'], now)
         view['elapsed_seconds'] = age(view['started_at'], dt.datetime.fromisoformat(
-            view['ended_at'].replace('Z', '+00:00')) if view['ended_at'] else now)
+            view['ended_at']) if view['ended_at'] else now)
         view['freshness'] = ('unknown' if view['age_seconds'] is None or errors else
             'stale' if view['age_seconds'] > FRESH_SECONDS else 'observed')
         return view
@@ -381,7 +383,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if identity not in history:
                     return self.response(404, {'error': 'run-unavailable'})
                 records, errors = history[identity]
-                return self.response(200, {'run': Reader.project(identity, records, errors, dt.datetime.now(dt.timezone.utc)), 'problems': problems})
+                return self.response(200, {'run': Reader.project(identity, records, errors, dt.datetime.now(dt.UTC)), 'problems': problems})
             return self.response(404, {'error': 'not-found'})
         except ValueError:
             return self.response(400, {'error': 'invalid-request'})

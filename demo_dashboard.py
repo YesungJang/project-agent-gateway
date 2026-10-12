@@ -9,7 +9,6 @@ from pathlib import Path
 
 import events
 
-
 SCENARIOS = ('completed', 'repair', 'repair-limit', 'risk', 'verifier-error',
              'bootstrap-failed', 'ci-pending', 'ci-failed', 'crash', 'cut-tail', 'FAST', 'DEBATE')
 
@@ -28,7 +27,7 @@ def generate(output):
     try:
         for number, scenario in enumerate(SCENARIOS, 1):
             # Older examples are intentionally stale; the last is recent.
-            timestamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=(len(SCENARIOS)-number)*3)
+            timestamp = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=(len(SCENARIOS)-number)*3)
             def clock():
                 nonlocal timestamp
                 timestamp += dt.timedelta(seconds=1)
@@ -37,7 +36,7 @@ def generate(output):
             writer = events.EventWriter(output, 'example/gateway', lock.fileno())
             result[scenario] = writer.run_id
             def emit(stage, outcome, task=False, attempt=0, **details):
-                return writer.append(stage, outcome, issue=number if stage not in ('queue', 'worker') else None,
+                return writer.append(stage, outcome, issue=number if stage not in ('queue', 'worker') else None,  # noqa: B023 - emit is only called inside this iteration
                     task_id='task-1' if task else None, attempt=attempt, **details)
             mode = scenario if scenario in ('FAST', 'DEBATE') else 'NORMAL'
             try:
@@ -54,7 +53,7 @@ def generate(output):
                     emit('worker', 'ERROR', diagnostic_code='BOOTSTRAP_FAILED')
                     emit('worker', 'exited')
                     continue
-                emit('bootstrap', 'PASS')
+                emit('bootstrap', 'PASS', validation=[{'name': 'unit', 'status': 'PASS', 'seconds': 4.6}])
                 emit('context', 'PASS')
                 if mode == 'DEBATE':
                     emit('debate', 'started')
@@ -64,7 +63,8 @@ def generate(output):
                 emit('plan_gate', 'skipped' if mode == 'FAST' else 'PASS', attempt=1, phase='PLAN')
                 emit('task', 'started', task=True, criteria_count=2)
                 emit('task', 'PASS', task=True, attempt=1)
-                emit('task_validation', 'PASS', task=True, attempt=1)
+                emit('task_validation', 'PASS', task=True, attempt=1,
+                     validation=[{'name': 'unit', 'status': 'PASS', 'seconds': 3.2}])
                 if scenario in ('crash', 'cut-tail'):
                     emit('task_gate', 'started', task=True, attempt=1)
                     continue
@@ -89,7 +89,9 @@ def generate(output):
                     emit('task_gate', 'skipped' if mode == 'FAST' else 'PASS', task=True, attempt=1)
                 emit('task_commit', 'PASS', task=True, attempt=2 if scenario == 'repair' else 1)
                 emit('task', 'done', task=True, attempt=2 if scenario == 'repair' else 1)
-                emit('full_validation', 'PASS')
+                emit('full_validation', 'PASS', validation=[
+                    {'name': 'unit', 'status': 'PASS', 'seconds': 5.1},
+                    {'name': 'lint', 'status': 'PASS', 'seconds': 0.6}])
                 emit('pr_prepare', 'PASS', head='a'*40, base='b'*40)
                 emit('pr_publish', 'PASS', pr_number=100+number, head='a'*40, base='b'*40)
                 if mode == 'FAST':
