@@ -128,7 +128,7 @@ PR #11 で報告されたデータに対する移行後の設定:
 ]
 ```
 
-`~/.config/agent-gateway/laplogos.json` が旧形式なら次回 E2E 前に上記へ移行する必要がある。Gateway は設定の自動書き換えを行わない。
+`~/.config/agent-gateway/laplogos.json` は上記の新形式へ移行済み（2026-10-12 に `validate_config` で確認）。Gateway は設定の自動書き換えを行わない。
 
 | 必須チェックの観測値 | 判定 |
 | --- | --- |
