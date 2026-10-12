@@ -489,6 +489,25 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("NEVER FAIL on a numeric duration mismatch", task)
         self.assertIn("non-deterministic wall-clock measurement", task)
 
+    def test_task_is_verified_against_its_own_task_not_the_whole_plan(self):
+        w = self.worker()
+        payloads = []
+        original = w.verify
+
+        def verify(payload):
+            payloads.append(payload)
+            return original(payload)
+
+        with patch.object(w, "verify", side_effect=verify):
+            self.assertTrue(w.once())
+        task = [p for p in payloads if p["verification_phase"] == "TASK"]
+        self.assertTrue(task)
+        for payload in task:
+            self.assertIn(payload["task"], payload["plan"]["tasks"])
+        contract = gateway.VERIFICATION_CONTRACTS["TASK"]
+        self.assertIn("Verify ONLY this task", contract)
+        self.assertIn("another task owns is NOT a defect of this one", contract)
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",

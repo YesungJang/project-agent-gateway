@@ -152,6 +152,10 @@ and already performed. Configured validation commands may rely on what bootstrap
 """,
     "TASK": """TASK verification occurs AFTER edits and configured task validation.
 Verify the task's acceptance criteria using post-change sources, diff, and task-specific validation evidence.
+Verify ONLY this task. plan lists every task of the approved plan: an Issue requirement that
+another task owns is NOT a defect of this one, and its absence from this diff is neither FAIL
+nor ERROR. Requirements no task claims were settled at PLAN; do not reopen them here. The
+completed branch is covered by the configured full validation and the PR.
 Verify observable outcomes against the Issue and trusted repository context, not
 unverifiable agent process history. Issue/task wording such as inspect package.json
 before editing, check repository structure, or verify existing configuration first
@@ -1173,6 +1177,8 @@ class Gateway:
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,
+                                    # Ownership of each Issue requirement across tasks.
+                                    "plan": plan,
                                     "diff": self.git(
                                         "diff", "--no-ext-diff", "--no-textconv", start
                                     ),
