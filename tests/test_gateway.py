@@ -399,6 +399,28 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(state["state"], "approval-required")
         self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
 
+    def test_plan_context_states_bootstrap_already_ran(self):
+        self.cfg["bootstrap"] = [["npm", "ci"], ["wasm-pack", "build", "core"]]
+        w = self.worker()
+        payloads = []
+        original = w.claude
+
+        def claude(payload, schema):
+            payloads.append(payload)
+            return original(payload, schema)
+
+        with patch.object(w, "run", side_effect=lambda argv, stdin=None, cwd=None:
+                          "" if argv in self.cfg["bootstrap"] else gateway.Gateway.run(w, argv, stdin, cwd)):
+            with patch.object(w, "claude", side_effect=claude):
+                self.assertTrue(w.once())
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertEqual(payload["bootstrap"], self.cfg["bootstrap"])
+        contract = gateway.VERIFICATION_CONTRACTS["PLAN"]
+        self.assertIn("ALREADY executed", contract)
+        self.assertIn("already performed", contract)
+        self.assertNotIn("bootstrap", gateway.VERIFICATION_CONTRACTS["TASK"])
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",

@@ -135,6 +135,12 @@ ERROR is reserved for actually missing required trusted context or infrastructur
 Do not require .github/workflows contents unless the plan specifically depends on
 inspecting/modifying CI or the Issue requires CI knowledge. required_checks is trusted
 deterministic Gateway configuration; its presence does not require workflow inspection.
+bootstrap lists trusted Gateway configuration commands the Gateway ALREADY executed in
+this worktree before planning: dependency installation and generated artifacts are in
+place. Do not require the plan to repeat, justify or avoid them, and do not treat their
+known writes as agent-proposed changes. A plan that itself proposes installation,
+dependency or artifact-generation steps => FAIL: those writes are outside allowed_paths
+and already performed. Configured validation commands may rely on what bootstrap built.
 """,
     "TASK": """TASK verification occurs AFTER edits and configured task validation.
 Verify the task's acceptance criteria using post-change sources, diff, and task-specific validation evidence.
@@ -1063,6 +1069,7 @@ class Gateway:
                 "repository_manifest": self.repository_manifest,
                 "issue": {"title": issue["title"], "body": issue["body"]},
                 "allowed_paths": self.cfg["allowed_paths"],
+                "bootstrap": self.cfg.get("bootstrap", []),
                 "test_names": list(self.cfg["validation"]),
                 "validation_commands": self.cfg["validation"],
                 "required_checks": self.cfg["required_checks"],
