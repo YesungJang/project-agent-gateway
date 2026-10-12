@@ -1147,6 +1147,7 @@ class Gateway:
                 self.event('task', 'started', criteria_count=len(task['criteria']))
                 start = self.git("rev-parse", "HEAD")
                 feedback = []
+                risk = None
                 for attempt in range(self.cfg.get("repair_attempts", 2) + 1):
                     self.event_attempt = attempt + 1
                     if attempt:
@@ -1216,7 +1217,11 @@ class Gateway:
                                   task_attempts=attempt + 1,
                                   task_feedback=exc.reasons if isinstance(exc, VerifierRisk) else [str(exc)],
                                   reason=str(exc))
-                        raise
+                        if not isinstance(exc, VerifierRisk):
+                            raise
+                        # Nothing has left the worktree yet: hand the risk back as feedback so the
+                        # implementation can withdraw it. Unresolved risk still stops below.
+                        risk, verdict = exc, {"verdict": "RISK", "reasons": exc.reasons}
                     except ApprovalRequired as exc:
                         verdict = {"verdict": "FAIL", "reasons": [str(exc)]}
                     if fingerprint != self.fingerprint():
@@ -1240,6 +1245,8 @@ class Gateway:
                         break
                     feedback = verdict["reasons"]
                 else:
+                    if risk is not None:
+                        raise risk
                     raise ApprovalRequired("Task validation/disagreement unresolved")
                 # Stage only policy-approved files; include new files in subsequent verification.
                 names = self.changed(base)
