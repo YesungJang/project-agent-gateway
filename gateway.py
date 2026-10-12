@@ -1138,6 +1138,9 @@ class Gateway:
                                 {
                                     "verification_phase": "TASK",
                                     "issue": context["issue"],
+                                    # The TASK contract requires these checks; supply their inputs.
+                                    "allowed_paths": self.cfg["allowed_paths"],
+                                    "protected_paths": self.cfg.get("protected_paths", []),
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,

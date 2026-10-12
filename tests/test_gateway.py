@@ -421,6 +421,26 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("already performed", contract)
         self.assertNotIn("bootstrap", gateway.VERIFICATION_CONTRACTS["TASK"])
 
+    def test_task_payload_supplies_the_scope_its_contract_checks(self):
+        self.cfg["protected_paths"] = ["src/payments/*"]
+        w = self.worker()
+        payloads = []
+        original = w.verify
+
+        def verify(payload):
+            payloads.append(payload)
+            return original(payload)
+
+        with patch.object(w, "verify", side_effect=verify):
+            self.assertTrue(w.once())
+        task = [p for p in payloads if p["verification_phase"] == "TASK"]
+        self.assertTrue(task)
+        for payload in task:
+            self.assertEqual(payload["allowed_paths"], self.cfg["allowed_paths"])
+            self.assertEqual(payload["protected_paths"], ["src/payments/*"])
+        self.assertIn("Preserve allowed/protected path checks",
+                      gateway.VERIFICATION_CONTRACTS["TASK"])
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",
