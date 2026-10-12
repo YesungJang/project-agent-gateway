@@ -2,3 +2,17 @@ __pycache__/
 .venv/
 work/
 .ruff_cache/
+.env
+.env.*
+config*.json
+!config.example.json
+state/
+gateway-state/
+events/
+logs/
+*.log
+*.jsonl
+*.tmp
+browser-artifacts/
+.playwright-mcp/
+.DS_Store
