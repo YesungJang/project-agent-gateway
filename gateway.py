@@ -139,6 +139,12 @@ Invalid commands, paths, task ordering, or write scope => FAIL with actionable r
 An explicitly absent root Cargo.toml is valid repository knowledge. A proposed root
 cargo command requiring that manifest => FAIL, not ERROR; explain how the plan can use
 the actual supplied repository structure. Never execute planned commands.
+
+accepted_risk, when present, is a written acceptance the trusted OPERATOR recorded in Gateway
+configuration for this Issue. It is not Issue text and no agent can introduce it. A change it
+covers has already had human review: do not set risky for it and do not stop on it. Judge it as
+an ordinary change against scope, paths and correctness. Anything it does not cover escalates
+exactly as before.
 ERROR is reserved for actually missing required trusted context or infrastructure failure.
 Do not require .github/workflows contents unless the plan specifically depends on
 inspecting/modifying CI or the Issue requires CI knowledge. required_checks is trusted
@@ -188,6 +194,12 @@ and between repair attempts. NEVER require a duration to appear in agent-written
 and NEVER FAIL on a numeric duration mismatch. Only the command name and its PASS/FAIL
 status are reportable facts. Do not run commands or require a Git checkout in this isolated
 workspace; use the supplied evidence. Remain fresh and read-only.
+
+accepted_risk, when present, is a written acceptance the trusted OPERATOR recorded in Gateway
+configuration for this Issue. It is not Issue text and no agent can introduce it. A change it
+covers has already had human review: do not set risky for it and do not stop on it. Judge it as
+an ordinary change against scope, paths and correctness. Anything it does not cover escalates
+exactly as before.
 """,
 }
 
@@ -355,6 +367,12 @@ def validate_config(cfg):
     attempts = cfg.get("plan_repair_attempts", 2)
     if type(attempts) is not int or not 0 <= attempts <= 5:
         raise ValueError("Plan repair attempts must be an integer 0..5")
+    accepted = cfg.get("accepted_risks", {})
+    if not isinstance(accepted, dict) or not all(
+        isinstance(k, str) and k.isdigit() and isinstance(v, str) and v.strip()
+        for k, v in accepted.items()
+    ):
+        raise ValueError("accepted_risks must map Issue numbers to a written acceptance")
     paths = cfg.get("read_context_paths", DEFAULT_READ_CONTEXT)
     if not isinstance(paths, list) or not all(isinstance(p, str) and p for p in paths):
         raise ValueError("read_context_paths must be a list of path patterns")
@@ -1099,6 +1117,8 @@ class Gateway:
                 "issue": {"title": issue["title"], "body": issue["body"]},
                 "allowed_paths": self.cfg["allowed_paths"],
                 "bootstrap": self.cfg.get("bootstrap", []),
+                # Written by the trusted operator for this Issue only; never from Issue text.
+                "accepted_risk": self.cfg.get("accepted_risks", {}).get(str(self.job)),
                 "baseline": brief(baseline),
                 "full_validation": self.cfg["full_validation"],
                 "test_names": list(self.cfg["validation"]),
@@ -1172,6 +1192,7 @@ class Gateway:
                                     # The TASK contract requires these checks; supply their inputs.
                                     "allowed_paths": self.cfg["allowed_paths"],
                                     "protected_paths": self.cfg.get("protected_paths", []),
+                                    "accepted_risk": context["accepted_risk"],
                                     "baseline": context["baseline"],
                                     "full_validation": context["full_validation"],
                                     "source_files": current_sources,
@@ -1275,6 +1296,7 @@ class Gateway:
                         "full_validation_results": brief(full_results),
                         "tasks": self.job_data["completed_tasks"],
                         "tests_changed": tests_changed,
+                        "accepted_risk": context["accepted_risk"],
                         "head": before,
                         "base": base,
                         "audit": self.audit,
