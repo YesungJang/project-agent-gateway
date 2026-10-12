@@ -92,6 +92,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - `.env` / `.env.*` / `.git` / `.ssh` / `.aws`、パス逸脱、シンボリックリンク、許可範囲外の編集は拒否する。
 - 依存/lock、migration/SQL、CI/隠しパス、infra/Terraform/AWS、auth/permission/secret/security/config/gateway、指示書、シェルスクリプトは承認へ昇格する。意味上の認証・権限変更を完全に判定することはできないため、リポジトリ管理者が protected_paths を追加する。
 - Git hooks は Gateway の Git 操作で無効。GitHub は設定の origin と一致する必要がある。各タスクを1コミットにする。
+- TASK フェーズの `RISK` は、理由をフィードバックして同じ `repair_attempts` の枠内で修復させる。この時点の変更は worktree の中だけにあり、push も PR もマージもしていないため。枠内で解消しなければ `VerifierRisk` のまま停止し、診断コードは `VERIFIER_RISK`、各試行は RISK として event に残る。PLAN・DEBATE の `RISK`、および `ERROR`（文脈・基盤障害）は従来どおり即停止で修復に入らない。`risky()` / `check_paths` / protected_paths / 許可パス / merge gate / 必須 CI の決定論的判定は一切変わらない。
 - タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
 - `mergeable=MERGEABLE` かつ `mergeStateStatus=UNSTABLE` は待機扱い。UNSTABLE は「マージ可能だが必須でないチェックが未確定」であり、最後の必須チェック完了後に GitHub が再計算するまで続く。必須チェックは手前で決定済みのため待ち、`ci_wait_seconds` 超過で `approval-required`。他の非 CLEAN 状態（BLOCKED/BEHIND/DIRTY など）と非 MERGEABLE は従来どおり即停止。停止・待機理由には観測した `mergeable` と `mergeStateStatus` を含める。
 - 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、必須 CI 成功、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。

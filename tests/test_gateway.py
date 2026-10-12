@@ -544,6 +544,47 @@ class GatewayTests(unittest.TestCase):
         for payload in payloads:
             self.assertIsNone(payload["accepted_risk"])
 
+    def test_withdrawn_task_risk_proceeds_and_nothing_escapes_the_worktree(self):
+        w = self.worker()
+        seen = []
+        original = w.verify
+
+        def verify(payload):
+            if payload["verification_phase"] != "TASK":
+                return original(payload)
+            seen.append(payload)
+            if len(seen) == 1:
+                raise gateway.VerifierRisk(["Withdraw the out-of-scope attribute change"])
+            return {"verdict": "PASS", "reasons": []}
+
+        with patch.object(w, "verify", side_effect=verify):
+            self.assertTrue(w.once())
+        self.assertEqual(len(seen), 2)
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "pr-ready")
+        self.assertEqual(state["task_attempts"], 2)
+        # The risk reasons reach the repair attempt rather than being swallowed.
+        self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
+
+    def test_unwithdrawn_task_risk_still_stops_as_a_risk(self):
+        w = self.worker()
+        reasons = ["Security semantics outside the accepted scope"]
+
+        def verify(payload):
+            if payload["verification_phase"] != "TASK":
+                return {"verdict": "PASS", "reasons": []}
+            raise gateway.VerifierRisk(reasons)
+
+        with patch.object(w, "verify", side_effect=verify):
+            with self.assertRaises(gateway.VerifierRisk) as caught:
+                w.once()
+        self.assertEqual(caught.exception.reasons, reasons)
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "approval-required")
+        self.assertEqual(state["task_gate"], "RISK")
+        self.assertFalse(state.get("completed_tasks"))
+        self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",
@@ -1498,9 +1539,16 @@ class GatewayTests(unittest.TestCase):
                     self.assertEqual(state[prefix + "_attempts"], 2)
                 else:
                     self.assertEqual(state["state"], "approval-required")
-                    self.assertEqual(len(calls), 1, "Risk/errors must never trigger repair")
-                    self.assertEqual(len(proposals), {"PLAN": 1, "TASK": 2, "CRITIQUE": 0}[phase])
-                    self.assertEqual(state[prefix + "_attempts"], 0 if phase == "CRITIQUE" else 1)
+                    # Risk inside the worktree is handed back as feedback and repaired within the
+                    # budget; everywhere else, and for every ERROR, risk still stops on sight.
+                    task_risk = phase == "TASK" and outcome.endswith("-risk")
+                    attempts = 2 if task_risk else 1
+                    self.assertEqual(len(calls), attempts,
+                                     "Only task-phase risk repairs; errors never do")
+                    self.assertEqual(len(proposals),
+                                     {"PLAN": 1, "TASK": 1 + attempts, "CRITIQUE": 0}[phase])
+                    self.assertEqual(state[prefix + "_attempts"],
+                                     0 if phase == "CRITIQUE" else attempts)
                     self.assertEqual(state[prefix + "_gate"], "RISK" if outcome.endswith("-risk") else "ERROR")
                     if outcome.endswith("-risk"):
                         self.assertEqual(state[prefix + "_feedback"], reasons)
