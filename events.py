@@ -39,7 +39,7 @@ class EventError(RuntimeError):
 
 
 def utc_now():
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')
+    return dt.datetime.now(dt.UTC).isoformat().replace('+00:00', 'Z')
 
 
 def _number(value, minimum=0):
@@ -131,7 +131,7 @@ def public_event(value):
     try:
         if not isinstance(timestamp, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z', timestamp):
             raise ValueError()
-        dt.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        dt.datetime.fromisoformat(timestamp)
     except ValueError:
         raise EventError('Invalid UTC timestamp') from None
     result = {key: value[key] for key in ('version', 'event_id', 'run_id', 'repository',
@@ -182,10 +182,10 @@ class EventWriter:
 
     def append(self, stage, outcome, issue=None, task_id=None, attempt=0, **details):
         os.fstat(self.lock_fd)  # A closed worker lock must not keep recording.
-        event = public_event(dict(version=VERSION, event_id=str(uuid.uuid4()),
-            run_id=self.run_id, repository=self.repository, sequence=self.sequence + 1,
-            timestamp=utc_now(), stage=stage, task_id=task_id, attempt=attempt,
-            issue=issue, outcome=outcome, details=details))
+        event = public_event({'version': VERSION, 'event_id': str(uuid.uuid4()),
+            'run_id': self.run_id, 'repository': self.repository, 'sequence': self.sequence + 1,
+            'timestamp': utc_now(), 'stage': stage, 'task_id': task_id, 'attempt': attempt,
+            'issue': issue, 'outcome': outcome, 'details': details})
         raw = (json.dumps(event, separators=(',', ':'), ensure_ascii=True) + '\n').encode()
         if len(raw) > MAX_LINE:
             raise EventError('Event too large')

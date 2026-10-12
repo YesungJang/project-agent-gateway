@@ -9,7 +9,6 @@ from pathlib import Path
 
 import events
 
-
 SCENARIOS = ('completed', 'repair', 'repair-limit', 'risk', 'verifier-error',
              'bootstrap-failed', 'ci-pending', 'ci-failed', 'crash', 'cut-tail', 'FAST', 'DEBATE')
 
@@ -28,7 +27,7 @@ def generate(output):
     try:
         for number, scenario in enumerate(SCENARIOS, 1):
             # Older examples are intentionally stale; the last is recent.
-            timestamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=(len(SCENARIOS)-number)*3)
+            timestamp = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=(len(SCENARIOS)-number)*3)
             def clock():
                 nonlocal timestamp
                 timestamp += dt.timedelta(seconds=1)
@@ -37,7 +36,7 @@ def generate(output):
             writer = events.EventWriter(output, 'example/gateway', lock.fileno())
             result[scenario] = writer.run_id
             def emit(stage, outcome, task=False, attempt=0, **details):
-                return writer.append(stage, outcome, issue=number if stage not in ('queue', 'worker') else None,
+                return writer.append(stage, outcome, issue=number if stage not in ('queue', 'worker') else None,  # noqa: B023 - emit is only called inside this iteration
                     task_id='task-1' if task else None, attempt=attempt, **details)
             mode = scenario if scenario in ('FAST', 'DEBATE') else 'NORMAL'
             try:
