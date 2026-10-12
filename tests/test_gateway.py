@@ -441,6 +441,30 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("Preserve allowed/protected path checks",
                       gateway.VERIFICATION_CONTRACTS["TASK"])
 
+    def test_agents_are_told_what_the_baseline_already_ran(self):
+        self.cfg["validation"]["extra"] = ["python3", "-c", "assert True"]
+        self.cfg["full_validation"] = ["unit", "extra"]
+        w = self.worker()
+        payloads = []
+        original = w.verify
+
+        def verify(payload):
+            payloads.append(payload)
+            return original(payload)
+
+        with patch.object(w, "verify", side_effect=verify):
+            self.assertTrue(w.once())
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertEqual(payload["full_validation"], ["unit", "extra"])
+            self.assertEqual([x["name"] for x in payload["baseline"]], ["unit", "extra"])
+            self.assertEqual({x["status"] for x in payload["baseline"]}, {"PASS"})
+            # Pre-change evidence only; command output never travels with it.
+            self.assertEqual(set(payload["baseline"][0]), {"name", "status", "seconds"})
+        contract = gateway.VERIFICATION_CONTRACTS["TASK"]
+        self.assertIn("BEFORE any edit", contract)
+        self.assertIn("do NOT\ntreat it as unavailable", contract)
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",

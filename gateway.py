@@ -163,7 +163,14 @@ genuinely missing required trusted context => ERROR. Required post-change source
 diff and validation evidence remain necessary; passing tests do not override an
 observable mismatch. Preserve allowed/protected path checks and safety requirements.
 test_results records successful Gateway execution of configured validation commands,
-not merely proposed tests. Do not run commands or require a Git checkout in this isolated
+not merely proposed tests.
+baseline records configured validation commands the Gateway executed in this worktree
+BEFORE any edit. It establishes the pre-change state only; it never demonstrates
+post-change behaviour. full_validation lists the commands the Gateway runs over the
+completed branch after all tasks. A configured command absent from this task's
+test_results was simply not selected for this task and runs at final validation: do NOT
+treat it as unavailable, unverifiable or skipped, do not require the task to execute it,
+and do not require a justification for its absence. Do not run commands or require a Git checkout in this isolated
 workspace; use the supplied evidence. Remain fresh and read-only.
 """,
 }
@@ -1070,6 +1077,8 @@ class Gateway:
                 "issue": {"title": issue["title"], "body": issue["body"]},
                 "allowed_paths": self.cfg["allowed_paths"],
                 "bootstrap": self.cfg.get("bootstrap", []),
+                "baseline": brief(baseline),
+                "full_validation": self.cfg["full_validation"],
                 "test_names": list(self.cfg["validation"]),
                 "validation_commands": self.cfg["validation"],
                 "required_checks": self.cfg["required_checks"],
@@ -1141,6 +1150,8 @@ class Gateway:
                                     # The TASK contract requires these checks; supply their inputs.
                                     "allowed_paths": self.cfg["allowed_paths"],
                                     "protected_paths": self.cfg.get("protected_paths", []),
+                                    "baseline": context["baseline"],
+                                    "full_validation": context["full_validation"],
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,
