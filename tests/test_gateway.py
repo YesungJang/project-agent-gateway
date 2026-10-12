@@ -350,6 +350,55 @@ class GatewayTests(unittest.TestCase):
             state["task_feedback"],
         )
 
+    def test_stop_is_explained_on_the_issue_without_leaking_evidence(self):
+        self.cfg["validation"]["unit"] = [
+            "python3",
+            "-c",
+            (
+                "from pathlib import Path; import sys;"
+                ' sys.exit(sys.stderr.write("secret assertion detail") and 1'
+                ' if Path("src/greeting.py").exists() else 0)'
+            ),
+        ]
+        w = self.published_worker()
+        with self.assertRaises(gateway.ApprovalRequired):
+            w.once()
+        comments = [c for c in w.calls if c[:2] == ("issue", "comment")]
+        self.assertEqual(len(comments), 1, w.calls)
+        self.assertEqual(comments[0][2], "1")
+        body = comments[0][comments[0].index("--body") + 1]
+        self.assertIn("GATE_FAILED", body)
+        self.assertIn("Last task gate verdict: **FAIL**", body)
+        # Command output, verifier wording and private paths never reach GitHub.
+        self.assertNotIn("secret assertion detail", body)
+        self.assertNotIn(str(w.state), body)
+        self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
+
+    def test_dry_run_never_comments_on_the_issue(self):
+        w = self.worker(fail_plan=True)
+        with self.assertRaises(gateway.ApprovalRequired):
+            w.once()
+        self.assertFalse(any(c[:2] == ("issue", "comment") for c in w.calls))
+
+    def test_failed_explanation_does_not_mask_the_original_stop(self):
+        w = self.published_worker()
+        w.fail_plan = True
+        original = w.gh
+
+        def gh(*args):
+            if args[:2] == ("issue", "comment"):
+                raise gateway.ApprovalRequired("Command failed: gh")
+            return original(*args)
+
+        with (
+            patch.object(w, "gh", side_effect=gh),
+            self.assertRaisesRegex(gateway.ApprovalRequired, "Plan"),
+        ):
+            w.once()
+        state = json.loads((w.state / "issue-1.json").read_text())
+        self.assertEqual(state["state"], "approval-required")
+        self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",

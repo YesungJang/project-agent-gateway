@@ -39,7 +39,7 @@ mise exec -- python3 gateway.py --config /absolute/path/config.json --state /abs
 ```
 
 通常の実行は GitHub を読み取り、ローカル worktree と PR 本文まで作成する。Claude/Codex API への送信を伴うため、対象の Issue・許可ソース・差分を両サービスに送ってよいことを事前に承認する。外部送信の承認後のみ実行する。
-GitHub 書き込みも承認済みの場合に限り `--publish` を追加する。`--publish` はラベル変更、push、PR 作成、安全なマージ、Issue close を明示的に許可する。初回に以下のラベルを GitHub で作成する:
+GitHub 書き込みも承認済みの場合に限り `--publish` を追加する。`--publish` はラベル変更、push、PR 作成、安全なマージ、Issue close、停止理由の Issue コメントを明示的に許可する。初回に以下のラベルを GitHub で作成する:
 
 - `gateway:queued`
 - `gateway:running`
@@ -94,6 +94,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
 - 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、必須 CI 成功、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
 - 必須 CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
+- 停止時は `--publish` のときだけ Issue にコメントする。内容は停止ステージ、固定の診断コードと定型文、固定語彙のゲート判定と試行回数のみ。verifier の文言・検証コマンドの出力・private パスは含めない。コメント送信の失敗は元の停止を隠さず、stderr に出して停止理由はそのまま伝播する。
 - PR は計画・検証コマンド・head/base・実測の検証結果の監査記録。Issue を自動 close する参照形式は使わず、マージ確認後のみ close。
 - state は mode 0700 推奨。ログは umask 077 で作成し、エージェント出力を含む。PR に載る情報を確認し、機密 Issue を投入しない。
 - crash や停止後は state に残る Issue を自動再実行しない。人が worktree、PR、state を調査する。worktree/ログは削除せず保持する。

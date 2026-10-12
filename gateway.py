@@ -15,7 +15,7 @@ import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote
 
-from events import EventError, EventWriter
+from events import DIAGNOSTICS, EventError, EventWriter
 
 
 class ApprovalRequired(RuntimeError):
@@ -774,6 +774,37 @@ class Gateway:
                     f"({argv[0]!r}): {exc}"
                 ) from exc
 
+    def explain_stop(self, exc):
+        """State where and why the run stopped, using the fixed diagnostic vocabulary.
+
+        Verifier reasons and validation feedback stay private: they can quote command
+        output, which never leaves the private logs and the verifier payload.
+        """
+        code = self.observation_error(exc)[1] or "CRASH"
+        body = (
+            f"Gateway stopped at `{self.active_stage or 'run'}`: **{code}**\n\n"
+            + DIAGNOSTICS.get(code, "Worker stopped; inspect private evidence locally.")
+        )
+        # Fixed verdicts and counts only; never the reasons behind them.
+        for phase in ("task", "plan"):
+            verdict = self.job_data.get(phase + "_gate")
+            if verdict in ("PASS", "FAIL", "ERROR", "RISK"):
+                attempts = self.job_data.get(phase + "_attempts")
+                body += f"\n\nLast {phase} gate verdict: **{verdict}**"
+                if type(attempts) is int:
+                    body += f" after {attempts} attempt(s)"
+                break
+        body += (
+            "\n\nNothing resumes automatically, and no further Issue is processed until "
+            "an operator acts. The stage evidence, verifier reasons and command output stay "
+            "in the private state directory and the read-only Dashboard."
+        )
+        try:
+            self.gh("issue", "comment", str(self.job), "--body", body)
+        except (ApprovalRequired, OSError) as error:
+            # Reporting must never replace or mask the original stop.
+            print(f"Stop explanation failed: {error}", file=sys.stderr)
+
     def baseline(self):
         """Green before any edit, so a pre-existing failure is never read as agent work."""
         fingerprint = self.fingerprint()
@@ -1265,6 +1296,8 @@ class Gateway:
                 )
             except (ApprovalRequired, OSError) as label_error:
                 print(f"Remote state update failed: {label_error}", file=sys.stderr)
+            if self.publish and self.job is not None:
+                self.explain_stop(exc)
             raise
         finally:
             self.event('run', self.event_state)
