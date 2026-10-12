@@ -1,3 +1,6 @@
 2026-10-10: Checked PR #6–#10 dependencies and current mergeability; historical #10 false was not reproducible.
 Propagated existing macOS fixture/UI fixes through #7–#10; 66/72/75/85 tests passed and real Mac legacy-state HTTP/Chrome checks passed.
 Recorded independent source review and CI/live-service limits in dashboard-integration-20261010.md; no merge, force push, configuration or Laplogos change.
+2026-10-11: Recorded validation outcomes as measurements: pre-edit baseline, measured test_results for the TASK verifier, failing output carried into repair feedback, and baseline/post-change results plus changed test files in the PR body. 60 tests passed; the four new tests were confirmed to fail at 026f95e.
+2026-10-12: Merged the dashboard stack into the measured-validation work, keeping both sides of all five conflicts and observing the baseline under the existing bootstrap stage. Advanced the safety regression BASELINE to the newest pre-instrumentation commit. 89 tests passed.
+2026-10-12: Added GitHub CI (Python suite, dashboard DOM boundaries, gateway.py lint) and a dashboard section listing stopped runs with their diagnostic code above the observer metrics. DOM regression failed before the change; real Chrome showed no overflow at 390x844.
