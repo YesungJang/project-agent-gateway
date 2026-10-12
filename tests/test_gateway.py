@@ -508,6 +508,42 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("Verify ONLY this task", contract)
         self.assertIn("another task owns is NOT a defect of this one", contract)
 
+    def test_operator_accepted_risk_is_config_only_and_scoped_to_one_issue(self):
+        for bad in ({"21": ""}, {"21": "   "}, {"twenty-one": "ok"}, {"21": 1}, ["21"]):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ValueError, "accepted_risks"):
+                    gateway.validate_config({**self.cfg, "accepted_risks": bad})
+        self.cfg["accepted_risks"] = {"1": "Validation may gate dispatch.", "2": "other issue"}
+        w = self.worker()
+        payloads = []
+        original = w.verify
+
+        def verify(payload):
+            payloads.append(payload)
+            return original(payload)
+
+        with patch.object(w, "verify", side_effect=verify):
+            self.assertTrue(w.once())
+        self.assertTrue(payloads)
+        for payload in payloads:
+            # Only this Issue's acceptance travels; never another Issue's, never the map.
+            self.assertEqual(payload["accepted_risk"], "Validation may gate dispatch.")
+        body = Path(json.loads((w.state / "issue-1.json").read_text())["audit"]).read_text()
+        self.assertIn("Validation may gate dispatch.", body)
+        for phase in ("PLAN", "TASK"):
+            contract = gateway.VERIFICATION_CONTRACTS[phase]
+            self.assertIn("trusted OPERATOR recorded in Gateway", contract)
+            self.assertIn("It is not Issue text", contract)
+
+    def test_absent_acceptance_changes_nothing(self):
+        w = self.worker()
+        payloads = []
+        original = w.verify
+        with patch.object(w, "verify", side_effect=lambda p: (payloads.append(p), original(p))[1]):
+            self.assertTrue(w.once())
+        for payload in payloads:
+            self.assertIsNone(payload["accepted_risk"])
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",

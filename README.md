@@ -152,6 +152,23 @@ GatePending は `ci_wait_seconds` まで最大5秒間隔で再取得し、期限
 
 根拠: [GitHub CheckRun の状態定義](https://docs.github.com/en/enterprise-cloud%40latest/graphql/reference/checks)、[StatusContext の状態定義](https://docs.github.com/en/graphql/reference/commits)、[gh の statusCheckRollup JSON 出力実装](https://github.com/cli/cli/blob/trunk/api/export_pr.go)。CheckRun の status と conclusion は別のフィールドであり、gh は workflowName/name を返すが `(pull_request)` 付きの識別子は返さない。
 
+## 運用者による risk の受理
+
+信頼済み設定の `accepted_risks` に Issue 番号と受理文を書くと、その Issue に限り、記載した変更を `risky` として停止させない。
+
+```json
+"accepted_risks": {
+  "22": "Client-side validation may gate action dispatch for this Issue only."
+}
+```
+
+- **Issue 本文からは一切到達できない。** 経路は信頼済み設定だけで、エージェントも Issue も追加できない。Issue text を根拠に危険な変更を許可する経路を作らないため。
+- Issue 番号ごとに限定する。当該 Issue の受理文だけが PLAN/TASK の payload に渡り、他の Issue の受理文もマップ全体も渡さない。
+- 受理文が覆う範囲だけが対象。それ以外は従来どおり `risky` に昇格して停止する。
+- `risky()` / `check_paths` / `protected_paths` の決定論的な判定、許可パス、merge gate、必須 CI は**一切変わらない**。受理が影響するのは verifier の `risky` 判定のみ。
+- 受理文は PR 本文の監査記録に載る。
+- 値は Issue 番号の文字列と空でない文字列のみ。形式違反は設定エラー。
+
 ## 現時点の制約
 
 GitHub 認証、Claude/Codex 認証、必要なラベル・CI、既定では branch protection の事前設定が必要。認証設定や権限を変更しない。GitHub の base 更新と API 呼び出しの間には競合の余地があるため、既定では strict protection による GitHub 側の最終判定も必須。`require_branch_protection=false` でも既存の base SHA 一致と CLEAN 判定を維持するが、判定後の base 更新を GitHub 側の strict protection で防ぐ保証はなくなる。ローカルの失敗注入 E2E を tests に用意。実サービス E2E は明示的な外部送信承認を得てから行う。
