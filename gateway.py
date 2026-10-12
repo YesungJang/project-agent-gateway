@@ -111,6 +111,12 @@ reading these files does not authorize edits. repository_manifest lists safe tra
 copied files, and explicitly checked absent paths. An absent path does not exist in the
 repository and is NOT an infrastructure error. A tracked file not copied is unavailable
 context, not evidence of absence. Excluded/unlisted paths have unknown status.
+bootstrap lists trusted commands the Gateway ALREADY ran in this worktree: dependencies and
+generated artifacts are in place. Never plan, repeat, or conditionally repeat them, and never
+make a task depend on whether an artifact exists. baseline lists configured validation commands
+the Gateway ran before any edit with their measured results; full_validation lists the commands
+it runs over the finished branch after all tasks. A configured command this task does not run is
+neither unavailable nor unverified; do not report it as such.
 Return the requested JSON.
 """
 

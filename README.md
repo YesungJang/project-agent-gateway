@@ -85,6 +85,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 ## 安全と状態
 
 - Issue は JSON のデータとして stdin に渡す。シェルは使わず、検証コマンドは設定の argv 配列だけから選択する。ただし検証コマンド自体がコードを実行するため、対象リポジトリとそのテストは事前に信頼・確認が必要。
+- エージェント向け POLICY で `bootstrap`（実行済み）、`baseline`（実装前の実測）、`full_validation`（最終検証のコマンド）の意味を明示する。準備作業の再実行・条件付き再実行を禁じ、タスクが走らせないコマンドを unavailable と報告させない。
 - Claude は safe/restricted mode、tools 無効、MCP 無効。許可されたテキストソースだけを渡し、構造化編集案を Gateway が適用する。セッションはタスク間で resume。直接 Bash/Edit は与えない。
 - Codex は毎回 fresh な read-only sandbox で検証する。`--approve-for-me` は workspace-write を許可するため検証器には使用しない。`--sandbox` との併用なし。危険な権限 bypass なし。
 - Codex には秘密ファイル・外部送信・変更を禁止する指示を渡す。CLI read-only sandbox は機密ファイルに対する完全な読み取り隔離ではない。機密を持つリポジトリは別の OS ユーザー/隔離環境で運用する。
