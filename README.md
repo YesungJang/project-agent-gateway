@@ -162,7 +162,7 @@ verifier payload の `verification_phase` は必須で、`PLAN` と `TASK` を�
 - root `Cargo.toml` の明示的な不存在は有効な知識。その存在を前提とする root の cargo コマンドは `FAIL` とし、実際の構成に基づく修正を Claude に返す。既存の回数上限内で再計画し、毎回 fresh/read-only の Codex で再検証する。
 - `PLAN` には信頼済み設定の `bootstrap` を渡す。Gateway が計画前に実行済みであることを前提とし、依存インストールや生成物の作成を計画に含めることを禁じる（`allowed_paths` 外への書き込みであり、かつ既に済んでいるため）。計画がそれらを提案したら `FAIL`。
 - `PLAN` では計画が CI の調査・変更に依存するか、Issue が CI 知識を要求する場合以外、`.github/workflows` の本文は要求しない。`required_checks` と検証コマンドは信頼済み Gateway 設定として渡す。読み取り文脈の選択範囲は広げない。
-- `TASK`: 編集後のソース・diff・タスク固有の検証証拠で達成条件を検証する。 `allowed_paths` と `protected_paths` も渡す（契約が範囲検査を要求するため）。Gateway が実際に成功を確認したコマンドを `test_results` に渡す。必要な証拠不足は `ERROR`、証拠に基づく未達成は `FAIL`。引き続き fresh/read-only とする。
+- `TASK`: 編集後のソース・diff・タスク固有の検証証拠で達成条件を検証する。 `allowed_paths` と `protected_paths` も渡す（契約が範囲検査を要求するため）。 `baseline`（実装前の実測結果）と `full_validation`（最終検証で走るコマンド名）も渡す。タスクの `tests` に選ばれなかったコマンドは最終全体検証で Gateway が実行するため、`test_results` に無いことを unavailable・未検証とは扱わない。baseline は実装前の状態のみを示し、変更後の挙動の証拠にはならない。Gateway が実際に成功を確認したコマンドを `test_results` に渡す。必要な証拠不足は `ERROR`、証拠に基づく未達成は `FAIL`。引き続き fresh/read-only とする。
 - `TASK` は実装結果を Issue と信頼済みリポジトリ文脈に照らして判定する。「編集前に package.json を読む」「構成や既存設定を調べる」は実装指示であり、操作順序・探索コマンド・内部推論の履歴証明は要求しない。README のコマンドを実際の package.json / Cargo.toml / repository_manifest と比較し、正しければ `PASS`、観測可能な不一致は `FAIL`、判断に本当に必要な文脈不足は `ERROR`。テスト成功だけで不一致を免除しない。
 - 元の Issue を TASK にも渡す。Issue が監査・ログ・プロセス証拠を受入成果物として明示した場合のみ、その成果物の存在と内容を検証する。要求成果物の不存在が確認できれば `FAIL`、判断材料が未提供なら `ERROR`。PLAN も隠れた推論・復元不能な過去の履歴証明を要求せず、将来の成果物の実現可能性を確認する。
 - FINAL/MERGE はこの verifier を共有せず、既存の決定論的な全体検証・CI・マージゲートを維持する。
