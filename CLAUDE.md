@@ -15,12 +15,15 @@ main へのマージは事前承認済み。ただし**下の条件が全部揃�
 7. 作業ツリーがクリーンで、**マージ後にもう一度テストが緑**。マージコミット自体を未検証のまま残さない。
 8. main から直接コミットせず、ブランチを切って 1コミット1意図、`--no-ff` でマージ。マージ後にブランチを削除する。
 
-## 条件が揃っていても人に聞くもの
+## 確認を取る範囲
 
-- **安全ゲートを緩める変更**: `risky` / `check_paths` / `check_context_path` / `validate_config` / `required_check_gate` / `merge_gate` / `POLICY` / `VERIFICATION_CONTRACTS`。緩める変更を自己承認でマージできるなら、このリポジトリの意味が消える。厳しくする変更は条件を満たせばマージしてよい。
-- `config.example.json` の非互換変更、state ファイル形式の破壊的変更。既存の設定が黙って壊れる。
-- 実サービス（Claude / Codex / GitHub）への送信を伴う E2E。外部送信は毎回承認を取る。
-- **push は別承認**。マージ OK は push OK ではない。
+既定は「実行してから報告」。push、GitHub への書き込み、実サービス実行、設定の修正、Issue の編集は、方針が決まっていれば都度確認しない。確認を取るのは次の3つだけ。
+
+- **安全ゲートを弱める変更**: `risky` / `check_paths` / `check_context_path` / `validate_config` / `required_check_gate` / `merge_gate` / `POLICY` / `VERIFICATION_CONTRACTS`。弱める変更を自己承認できるなら、このリポジトリの意味が消える。**情報を増やす・厳しくする変更は確認不要**で、実際この4つの修正（bootstrap 伝達、TASK の allowed_paths、baseline 伝達、POLICY の説明）はすべてそれに当たった。
+- **取り返しのつかない外部操作**: 対象リポジトリの main への自動マージ、Issue の close、履歴の書き換え。
+- **方針そのものの選択**: どの案を採るか、何を作るか。
+
+安全 regression の pinned baseline を進めるのは、承認済みの挙動変更に追随する保守であって、それ自体は確認対象ではない。
 
 ## 設計の前提
 
