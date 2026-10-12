@@ -1,5 +1,10 @@
 # Browser Dashboard
 
+Runs that stopped for a human — `approval-required` or `failed` — are listed first,
+above the observer metrics, with each run's last diagnostic code and stage. The
+section is hidden when nothing is stopped, so an idle Gateway stays quiet. Selecting
+an entry opens that run below; it adds no control over the Gateway.
+
 The root URL shows a CodePipeline-style grouped pipeline, recorded queue, run
 selection, separate worker health and historical run status, task attempts/repairs,
 fixed diagnostic summaries, PR head/base, exact CI identities and merge confirmation.

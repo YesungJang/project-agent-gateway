@@ -18,6 +18,12 @@ See [local startup and operations](docs/dashboard-operations.md),
 [event history](docs/event-history.md), [worker observation](docs/worker-observation.md),
 [read-only API](docs/read-only-api.md), [browser UI and synthetic demo](docs/dashboard-ui.md),
 and [verification and remaining acceptance work](docs/dashboard-verification.md).
+
+停止した run（`approval-required` / `failed`）は観測メトリクスより上に、最後の診断コードと停止ステージ付きで一覧する。停止がなければ非表示。
+
+## CI
+
+`.github/workflows/ci.yml` が push と PR で Python スイート、Dashboard の DOM 境界テスト、`gateway.py` の Ruff を実行する。`required_checks` には `check-run:CI/test` と `check-run:CI/lint` を指定できる。安全 regression は pinned commit と比較するため、checkout は `fetch-depth: 0` が必要。
 The implementation PRs remain drafts pending independent Codex CLI and real-browser
 verification. macOS-specific behavior has not been verified in the cloud session.
 

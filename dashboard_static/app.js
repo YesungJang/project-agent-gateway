@@ -33,6 +33,19 @@ function updateClock() {
   if(run&&byId('run-age'))byId('run-age').textContent=duration(ageSeconds(run.updated_at))+' ago';
   if(run&&byId('run-elapsed')){const seconds=run.ended_at&&run.started_at?Math.max(0,Math.floor((Date.parse(run.ended_at)-Date.parse(run.started_at))/1000)):ageSeconds(run.started_at);byId('run-elapsed').textContent=duration(seconds);}
 }
+function renderTriage() {
+  const stopped=snapshot.runs.filter(run=>run.status==='approval-required'||run.status==='failed');
+  byId('triage').hidden=!stopped.length;
+  byId('triage-count').textContent=stopped.length+(stopped.length===1?' run needs a decision':' runs need a decision');
+  replace('triage-list',...stopped.map(run=>{
+    const last=run.diagnostics.length?run.diagnostics[run.diagnostics.length-1]:null;
+    const button=node('button',undefined,'triage-item'+(run.id===selected?' selected':''));button.type='button';button.dataset.runId=run.id;
+    button.append(node('strong',run.issue?'Issue #'+run.issue:'Worker invocation'),badge(run.status),
+      node('span',last?last.diagnostic_code+' · '+last.stage:'No recorded diagnostic','triage-code'),
+      node('small',last?last.summary:'Reason not recorded; inspect the private state.'));
+    button.addEventListener('click',()=>{selected=run.id;renderOverview();renderRun();});return button;
+  }));
+}
 function renderOverview() {
   byId('queue-count').textContent=snapshot.queue.observed_count===null?'Unknown':String(snapshot.queue.observed_count)+' observed';
   byId('run-count').textContent=String(snapshot.runs.length);
@@ -51,6 +64,7 @@ function renderOverview() {
   replace('queue-list',...snapshot.queue.issues.map(number=>{const item=node('div',undefined,'queue-item');item.append(snapshot.queue.repository?link('Issue #'+number,'https://github.com/'+snapshot.queue.repository+'/issues/'+number):node('span','Issue #'+number));return item;}));
   if(!snapshot.queue.issues.length)replace('queue-list',empty(snapshot.queue.timestamp?'No issues in this snapshot.':'No queue history.'));
   byId('legacy-panel').hidden=!snapshot.legacy.length;
+  renderTriage();
   replace('legacy-list',...snapshot.legacy.map(item=>{const e=node('div',undefined,'legacy-item');e.append(node('span','Issue #'+item.issue+' '),badge(item.state));return e;}));
   updateClock();
 }

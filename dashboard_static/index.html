@@ -15,6 +15,11 @@
   <div class="notice" id="connection" role="status" aria-live="polite">Connecting to local observer…</div>
   <main>
     <section class="page-heading"><div><p class="eyebrow">LOCAL EXECUTION HISTORY</p><h1>Pipeline dashboard</h1><p>Follow the evidence, gates, and handoffs of each run.</p></div><div class="observed"><span id="last-poll">No API observation yet</span><small>Polling every 5 seconds · no GitHub requests</small></div></section>
+    <section class="panel triage" id="triage" aria-label="Runs awaiting a decision" hidden>
+      <div class="panel-heading"><h2 id="triage-count">—</h2><span class="tiny-label">NEEDS A DECISION</span></div>
+      <p class="caption">Stopped runs never resume on their own. Inspect the private evidence, then act in GitHub.</p>
+      <div id="triage-list" class="triage-list"></div>
+    </section>
     <section class="metrics" aria-label="Observer overview">
       <article class="metric"><span>WORKER HEALTH</span><strong id="worker-health">Unknown</strong><small id="worker-detail">PID is not proof of liveness</small></article>
       <article class="metric"><span>QUEUE SNAPSHOT</span><strong id="queue-count">—</strong><small id="queue-freshness">No recorded snapshot</small></article>

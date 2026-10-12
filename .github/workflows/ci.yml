@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # test_safety_regression compares behaviour against a pinned commit.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Python suite
+        run: python -m unittest discover -s tests -v
+      - name: Dashboard DOM boundaries
+        run: |
+          python demo_dashboard.py --output "$RUNNER_TEMP/demo"
+          python -c "import json, dashboard; print(json.dumps(dashboard.Reader('$RUNNER_TEMP/demo').snapshot()))" > "$RUNNER_TEMP/snapshot.json"
+          node tests/dashboard_dom.cjs "$RUNNER_TEMP/snapshot.json"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # dashboard.py, events.py and tests/ carry pre-existing findings tracked separately.
+      - run: pipx run ruff check gateway.py
