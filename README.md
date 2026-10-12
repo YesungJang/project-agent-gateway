@@ -160,6 +160,7 @@ verifier payload の `verification_phase` は必須で、`PLAN` と `TASK` を�
 
 - `PLAN`（DEBATE の事前要件批評も含む）: 信頼済み文脈に照らして計画の実行可能性、Issue 要件、パス・コマンド、依存順序、書き込み範囲、安全性だけを検証する。変更後 README、実装 diff、テスト実行結果、変更済み worktree、git diff/status、実装後成果物を要求しない。不正なコマンド・パス・順序・範囲は具体的な修正理由付き `FAIL`。本当に必要な信頼済み文脈の欠落や検証基盤障害は `ERROR`。
 - root `Cargo.toml` の明示的な不存在は有効な知識。その存在を前提とする root の cargo コマンドは `FAIL` とし、実際の構成に基づく修正を Claude に返す。既存の回数上限内で再計画し、毎回 fresh/read-only の Codex で再検証する。
+- `PLAN` には信頼済み設定の `bootstrap` を渡す。Gateway が計画前に実行済みであることを前提とし、依存インストールや生成物の作成を計画に含めることを禁じる（`allowed_paths` 外への書き込みであり、かつ既に済んでいるため）。計画がそれらを提案したら `FAIL`。
 - `PLAN` では計画が CI の調査・変更に依存するか、Issue が CI 知識を要求する場合以外、`.github/workflows` の本文は要求しない。`required_checks` と検証コマンドは信頼済み Gateway 設定として渡す。読み取り文脈の選択範囲は広げない。
 - `TASK`: 編集後のソース・diff・タスク固有の検証証拠で達成条件を検証する。Gateway が実際に成功を確認したコマンドを `test_results` に渡す。必要な証拠不足は `ERROR`、証拠に基づく未達成は `FAIL`。引き続き fresh/read-only とする。
 - `TASK` は実装結果を Issue と信頼済みリポジトリ文脈に照らして判定する。「編集前に package.json を読む」「構成や既存設定を調べる」は実装指示であり、操作順序・探索コマンド・内部推論の履歴証明は要求しない。README のコマンドを実際の package.json / Cargo.toml / repository_manifest と比較し、正しければ `PASS`、観測可能な不一致は `FAIL`、判断に本当に必要な文脈不足は `ERROR`。テスト成功だけで不一致を免除しない。
