@@ -894,10 +894,16 @@ class Gateway:
         protection_contexts = required_check_gate(
             data["statusCheckRollup"], self.cfg["required_checks"]
         )
+        observed = f"mergeable={data['mergeable']} mergeStateStatus={data['mergeStateStatus']}"
         if data["mergeable"] == "UNKNOWN" or data["mergeStateStatus"] == "UNKNOWN":
-            raise GatePending("Waiting for GitHub mergeability")
+            raise GatePending(f"Waiting for GitHub mergeability: {observed}")
+        # UNSTABLE means mergeable with non-required checks unsettled, and GitHub reports it
+        # for a while after the last required check completes. Required checks are already
+        # decided above, so wait for the recomputation and fail closed at the deadline.
+        if data["mergeable"] == "MERGEABLE" and data["mergeStateStatus"] == "UNSTABLE":
+            raise GatePending(f"Waiting for GitHub to settle mergeability: {observed}")
         if data["mergeable"] != "MERGEABLE" or data["mergeStateStatus"] != "CLEAN":
-            raise ApprovalRequired("Merge blocked or branch requires update")
+            raise ApprovalRequired(f"Merge blocked or branch requires update: {observed}")
         # Only protection is optional; every local/PR/CI gate above still applies.
         if self.cfg.get("require_branch_protection", True) is False:
             return
