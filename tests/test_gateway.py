@@ -78,7 +78,9 @@ class LocalGateway(gateway.Gateway):
         if "plan" in payload and self.fail_plan:
             return {"verdict": "FAIL", "reasons": ["Missing criterion"]}
         if "diff" in payload:
-            assert [x["name"] for x in payload["test_results"]] == payload["tests"]
+            prelude = payload.get("validation_prelude", [])
+            expected = prelude + [x for x in payload["tests"] if x not in prelude]
+            assert [x["name"] for x in payload["test_results"]] == expected
             for result in payload["test_results"]:
                 assert result["argv"] == self.cfg["validation"][result["name"]]
                 assert result["status"] == "PASS"
@@ -584,6 +586,28 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(state["task_gate"], "RISK")
         self.assertFalse(state.get("completed_tasks"))
         self.assertFalse(any(c[:2] == ("pr", "create") for c in w.calls))
+
+    def test_validation_prelude_always_runs_first_and_only_once(self):
+        self.cfg["validation"]["generate"] = ["python3", "-c", "assert True"]
+        self.cfg["validation_prelude"] = ["generate"]
+        for bad in (["missing"], ["generate", "generate"], "generate"):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ValueError, "validation_prelude"):
+                    gateway.validate_config({**self.cfg, "validation_prelude": bad})
+        w = self.worker()
+        self.assertEqual([x["name"] for x in w.tests(["unit"])], ["generate", "unit"])
+        # Selecting a prelude command does not run it twice.
+        self.assertEqual([x["name"] for x in w.tests(["unit", "generate"])], ["generate", "unit"])
+        payloads = []
+        original = w.verify
+        with patch.object(w, "verify", side_effect=lambda p: (payloads.append(p), original(p))[1]):
+            self.assertTrue(w.once())
+        for payload in payloads:
+            self.assertEqual(payload["validation_prelude"], ["generate"])
+        task = [p for p in payloads if p["verification_phase"] == "TASK"]
+        for payload in task:
+            self.assertEqual([x["name"] for x in payload["test_results"]][0], "generate")
+        self.assertIn("never plan them, order", gateway.POLICY)
 
     def test_risk_and_escape_policy(self):
         for name in [

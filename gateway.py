@@ -118,7 +118,9 @@ the Gateway ran before any edit with their measured results; full_validation lis
 it runs over the finished branch after all tasks. A configured command this task does not run is
 neither unavailable nor unverified; do not report it as such. Measured durations are Gateway
 wall-clock observations that differ between runs and attempts: never copy one into source,
-documentation or a work log. Report which commands ran and whether they passed.
+documentation or a work log. Report which commands ran and whether they passed. validation_prelude lists commands
+the Gateway runs first before EVERY validation, including each task's: never plan them, order
+them, or make a task responsible for regenerating build artifacts before its own checks.
 Return the requested JSON.
 """
 
@@ -367,6 +369,11 @@ def validate_config(cfg):
     attempts = cfg.get("plan_repair_attempts", 2)
     if type(attempts) is not int or not 0 <= attempts <= 5:
         raise ValueError("Plan repair attempts must be an integer 0..5")
+    prelude = cfg.get("validation_prelude", [])
+    if not isinstance(prelude, list) or any(x not in cfg["validation"] for x in prelude):
+        raise ValueError("validation_prelude must list configured validation names")
+    if len(set(prelude)) != len(prelude):
+        raise ValueError("validation_prelude must not repeat a command")
     accepted = cfg.get("accepted_risks", {})
     if not isinstance(accepted, dict) or not all(
         isinstance(k, str) and k.isdigit() and isinstance(v, str) and v.strip()
@@ -868,8 +875,10 @@ class Gateway:
     def tests(self, names):
         if not names or any(x not in self.cfg["validation"] for x in names):
             raise ApprovalRequired("Unknown/empty test selection")
+        # Ordering preconditions are the Gateway's job, never the plan's to remember.
+        prelude = self.cfg.get("validation_prelude", [])
         results = []
-        for name in names:
+        for name in prelude + [x for x in names if x not in prelude]:
             argv = self.cfg["validation"][name]
             started = time.monotonic()
             failure = None
@@ -1121,6 +1130,7 @@ class Gateway:
                 "accepted_risk": self.cfg.get("accepted_risks", {}).get(str(self.job)),
                 "baseline": brief(baseline),
                 "full_validation": self.cfg["full_validation"],
+                "validation_prelude": self.cfg.get("validation_prelude", []),
                 "test_names": list(self.cfg["validation"]),
                 "validation_commands": self.cfg["validation"],
                 "required_checks": self.cfg["required_checks"],
@@ -1196,6 +1206,7 @@ class Gateway:
                                     "accepted_risk": context["accepted_risk"],
                                     "baseline": context["baseline"],
                                     "full_validation": context["full_validation"],
+                                    "validation_prelude": context["validation_prelude"],
                                     "source_files": current_sources,
                                     "repository_manifest": self.repository_manifest,
                                     "task": task,
