@@ -78,6 +78,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - 各検証コマンドについて `status`（実測）、`seconds`、`output_tail`（末尾15行・2000文字）を記録する。TASK verifier の `test_results` にはこの実測値を渡す。固定の `PASS` は渡さない。
 - 検証失敗時は出力末尾を例外メッセージに含める。修復時の Claude へのフィードバックと state の `task_feedback` に残り、`(see private logs)` だけで終わらない。
 - PR 本文に baseline と全体検証の実測結果（name / status / seconds）、タスクごとの検証結果、変更されたテストファイル一覧を載せる。`output_tail` は PR に載せず、private log と verifier のみに渡す。本文サイズと公開範囲を抑えるため。
+- baseline・タスク検証・全体検証の実測（name / status / seconds）は event の `validation` detail としても記録し、Dashboard の該当ステージに表示する。`output_tail` は event にも HTTP にも出さない。
 - `tests_changed` はパスに `test` / `spec` を含むかどうかのヒューリスティックで、カバレッジの指標ではない。テスト変更がなくても停止はせず、事実として表示する。
 - `output_tail` は検証コマンドの出力であり、verifier（外部サービス）と PR 本文経由ではない private log に渡る。出力に秘密を含むコマンドを `validation` に設定しない。
 

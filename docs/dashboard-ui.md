@@ -8,7 +8,8 @@ an entry opens that run below; it adds no control over the Gateway.
 The root URL shows a CodePipeline-style grouped pipeline, recorded queue, run
 selection, separate worker health and historical run status, task attempts/repairs,
 fixed diagnostic summaries, PR head/base, exact CI identities and merge confirmation.
-Labels and symbols accompany colors. Run selection is the only button interaction.
+Validation stages also show what was measured — command name, outcome and elapsed
+seconds — so a green stage states what actually ran. Labels and symbols accompany colors. Run selection is the only button interaction.
 The page supports keyboard focus and narrow screens. No external assets are loaded.
 All API-derived text uses DOM text nodes, not HTML interpretation.
 

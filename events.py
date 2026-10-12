@@ -75,7 +75,20 @@ def safe_details(details):
     numbers = details.get('queue_issues')
     if isinstance(numbers, list):
         result['queue_issues'] = [n for n in numbers[:100] if _number(n, 1)]
-    # Exact public CI identities are the ONLY free-form metadata permitted.
+    # Measured validation: configured command names and timings, never their output.
+    measured = details.get('validation')
+    if isinstance(measured, list):
+        result['validation'] = []
+        for item in measured[:20]:
+            if not isinstance(item, dict):
+                continue
+            name, status, seconds = item.get('name'), item.get('status'), item.get('seconds')
+            if (isinstance(name, str) and _TOKEN.fullmatch(name)
+                    and status in ('PASS', 'FAIL')
+                    and type(seconds) in (int, float) and 0 <= seconds <= 86400):
+                result['validation'].append(
+                    {'name': name, 'status': status, 'seconds': seconds})
+    # Exact public CI identities and the above are the ONLY free-form metadata permitted.
     checks = details.get('checks')
     if isinstance(checks, list):
         result['checks'] = []

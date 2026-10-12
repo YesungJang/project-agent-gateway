@@ -16,8 +16,13 @@ text, source, diff, commands, stdout/stderr, configuration, environment or excep
 text is stored. Task criteria are represented by a count; operators consult private
 state for their actual wording. Diagnostics use fixed codes and fixed summaries.
 Optional private-log references are UUIDs, never paths. CI identifiers are intentionally
-publishable metadata and must not contain credentials; they are the only arbitrary
-bounded text admitted by the contract.
+publishable metadata and must not contain credentials; they and the validation command
+names below are the only arbitrary bounded text admitted by the contract.
+
+Validation stages carry measured outcomes: the configured command name, PASS/FAIL
+as executed, and elapsed seconds. Command output is never recorded — the output tail
+stays in the private logs and the verifier payload. Names come from trusted Gateway
+configuration and are bounded like CI identifiers; they must not contain credentials.
 
 Each line is flushed and fsynced before its sequence advances. File creation fsyncs
 the event directory. A crash can leave a partial tail or a line whose fsync was not

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from events import EventWriter, EventError, read_lines
+from events import EventWriter, EventError, read_lines, safe_details
 
 
 class EventTests(unittest.TestCase):
@@ -46,6 +46,25 @@ class EventTests(unittest.TestCase):
             self.assertEqual(w2.append('worker', 'started')['sequence'], 1)
         finally:
             w2.close()
+
+    def test_validation_details_keep_measurements_and_drop_output(self):
+        kept = safe_details({'validation': [
+            {'name': 'unit', 'status': 'PASS', 'seconds': 4.9, 'output_tail': 'secret'},
+            {'name': 'lint', 'status': 'FAIL', 'seconds': 0},
+        ]})
+        self.assertEqual(kept, {'validation': [
+            {'name': 'unit', 'status': 'PASS', 'seconds': 4.9},
+            {'name': 'lint', 'status': 'FAIL', 'seconds': 0},
+        ]})
+        for bad in ({'name': 'unit', 'status': 'PASS'},
+                    {'name': 'unit', 'status': 'passed', 'seconds': 1},
+                    {'name': 'unit\n', 'status': 'PASS', 'seconds': 1},
+                    {'name': 'unit', 'status': 'PASS', 'seconds': -1},
+                    {'name': 'unit', 'status': 'PASS', 'seconds': '1'},
+                    'unit'):
+            with self.subTest(bad=bad):
+                self.assertEqual(safe_details({'validation': [bad]}), {'validation': []})
+        self.assertEqual(safe_details({'validation': 'unit'}), {})
 
     def test_tail_unknown_fields_and_unknown_version(self):
         w = self.writer()

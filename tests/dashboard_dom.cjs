@@ -43,6 +43,7 @@ vm.runInContext(source,context);
   select(11);assert.match(elements.pipeline.textContent,/skipped/);
   assert.match(elements.delivery.textContent,/Not confirmed/);
   select(12);assert.match(elements.pipeline.textContent,/DEBATE critique✓ PASS/);
+  assert.match(elements.pipeline.textContent,/unit PASS [0-9.]+s/);
   payload.runs.find(r=>r.issue===12).diagnostics.push({outcome:'ERROR',diagnostic_code:'TEST',summary:'<img src=x onerror="pwned()">',stage:'task_gate',attempt:1,timestamp:payload.generated_at});payload.changed=true;
   await vm.runInContext('poll()',context);
   assert.match(elements.diagnostics.textContent,/<img src=x onerror/);

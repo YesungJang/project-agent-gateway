@@ -221,6 +221,8 @@ class Reader:
                 view['publish'] = details['publish']
             if stage in stages:
                 stages[stage] = {'outcome': outcome, 'timestamp': event['timestamp']}
+                if details.get('validation'):
+                    stages[stage]['validation'] = details['validation']
                 if stage != 'claim':  # claim spans the entire processing call.
                     view['current_stage'] = stage
             task_id = event['task_id']
