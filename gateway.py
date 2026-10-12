@@ -116,7 +116,9 @@ generated artifacts are in place. Never plan, repeat, or conditionally repeat th
 make a task depend on whether an artifact exists. baseline lists configured validation commands
 the Gateway ran before any edit with their measured results; full_validation lists the commands
 it runs over the finished branch after all tasks. A configured command this task does not run is
-neither unavailable nor unverified; do not report it as such.
+neither unavailable nor unverified; do not report it as such. Measured durations are Gateway
+wall-clock observations that differ between runs and attempts: never copy one into source,
+documentation or a work log. Report which commands ran and whether they passed.
 Return the requested JSON.
 """
 
@@ -176,7 +178,11 @@ post-change behaviour. full_validation lists the commands the Gateway runs over 
 completed branch after all tasks. A configured command absent from this task's
 test_results was simply not selected for this task and runs at final validation: do NOT
 treat it as unavailable, unverifiable or skipped, do not require the task to execute it,
-and do not require a justification for its absence. Do not run commands or require a Git checkout in this isolated
+and do not require a justification for its absence.
+The seconds field is a non-deterministic wall-clock measurement that varies between runs
+and between repair attempts. NEVER require a duration to appear in agent-written content,
+and NEVER FAIL on a numeric duration mismatch. Only the command name and its PASS/FAIL
+status are reportable facts. Do not run commands or require a Git checkout in this isolated
 workspace; use the supplied evidence. Remain fresh and read-only.
 """,
 }

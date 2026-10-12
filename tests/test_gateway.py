@@ -482,6 +482,13 @@ class GatewayTests(unittest.TestCase):
         argv = run.call_args.args[0]
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], gateway.POLICY)
 
+    def test_durations_are_measurements_not_reportable_facts(self):
+        self.assertIn("never copy one into source", gateway.POLICY)
+        self.assertIn("whether they passed", gateway.POLICY)
+        task = gateway.VERIFICATION_CONTRACTS["TASK"]
+        self.assertIn("NEVER FAIL on a numeric duration mismatch", task)
+        self.assertIn("non-deterministic wall-clock measurement", task)
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",
