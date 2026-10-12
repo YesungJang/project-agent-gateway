@@ -57,6 +57,25 @@ class MergeChecksTests(unittest.TestCase):
                     self.assertIn("check-run:CI/unit", str(error.exception))
                     self.assertIn(f"status='{status}'", str(error.exception))
 
+    def test_unstable_waits_then_other_blocked_states_stop(self):
+        # GitHub reports UNSTABLE for a while after the last required check completes.
+        self.data["mergeStateStatus"] = "UNSTABLE"
+        with self.assertRaises(gateway.GatePending) as error:
+            self.gate()
+        self.assertIn("mergeStateStatus=UNSTABLE", str(error.exception))
+        for status in ("BLOCKED", "BEHIND", "DIRTY", "DRAFT", "HAS_HOOKS"):
+            self.data["mergeStateStatus"] = status
+            with self.subTest(status=status):
+                with self.assertRaises(gateway.ApprovalRequired) as error:
+                    self.gate()
+                self.assertNotIsInstance(error.exception, gateway.GatePending)
+                self.assertIn(f"mergeStateStatus={status}", str(error.exception))
+        self.data["mergeStateStatus"] = "UNSTABLE"
+        self.data["mergeable"] = "CONFLICTING"
+        with self.assertRaises(gateway.ApprovalRequired) as error:
+            self.gate()
+        self.assertNotIsInstance(error.exception, gateway.GatePending)
+
     def test_success(self):
         self.gate()
 

@@ -93,6 +93,7 @@ Git worktree には Git 管理下のファイルだけが入り、元 checkout �
 - 依存/lock、migration/SQL、CI/隠しパス、infra/Terraform/AWS、auth/permission/secret/security/config/gateway、指示書、シェルスクリプトは承認へ昇格する。意味上の認証・権限変更を完全に判定することはできないため、リポジトリ管理者が protected_paths を追加する。
 - Git hooks は Gateway の Git 操作で無効。GitHub は設定の origin と一致する必要がある。各タスクを1コミットにする。
 - タスクのテスト失敗/FAIL は最大 repair_attempts 回修復する。計画修復の上限超過、修復不能、危険変更、タイムアウト、不明な CI は approval-required で停止。自動承認の機構は設けない。
+- `mergeable=MERGEABLE` かつ `mergeStateStatus=UNSTABLE` は待機扱い。UNSTABLE は「マージ可能だが必須でないチェックが未確定」であり、最後の必須チェック完了後に GitHub が再計算するまで続く。必須チェックは手前で決定済みのため待ち、`ci_wait_seconds` 超過で `approval-required`。他の非 CLEAN 状態（BLOCKED/BEHIND/DIRTY など）と非 MERGEABLE は従来どおり即停止。停止・待機理由には観測した `mergeable` と `mergeStateStatus` を含める。
 - 全体検証後に dirty または HEAD 変化があれば停止。PR の head/base、許可パス、必須 CI 成功、MERGEABLE/CLEAN、既定では strict branch protection、管理者にも適用される checks を確認。マージは `--match-head-commit` を使用。管理者 bypass、自動マージ予約なし。
 - 必須 CI が pending なら ci_wait_seconds（既定300秒）まで待つ。失敗、スキップ、待ち時間超過は PR を残して承認待ちで停止する。停止後の自動再開は行わず、人が GitHub 上で状態を確認する。
 - 停止時は `--publish` のときだけ Issue にコメントする。内容は停止ステージ、固定の診断コードと定型文、固定語彙のゲート判定と試行回数のみ。verifier の文言・検証コマンドの出力・private パスは含めない。コメント送信の失敗は元の停止を隠さず、stderr に出して停止理由はそのまま伝播する。
