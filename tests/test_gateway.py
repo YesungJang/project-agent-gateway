@@ -465,6 +465,23 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("BEFORE any edit", contract)
         self.assertIn("do NOT\ntreat it as unavailable", contract)
 
+    def test_policy_explains_the_prepared_environment_to_the_agents(self):
+        for phrase in ("ALREADY ran in this worktree",
+                       "conditionally repeat",
+                       "neither unavailable nor unverified"):
+            self.assertIn(phrase, gateway.POLICY)
+        w = self.worker()
+        with patch.object(
+            w,
+            "run",
+            return_value=json.dumps(
+                {"session_id": "id", "structured_output": {"tasks": []}}
+            ),
+        ) as run:
+            gateway.Gateway.claude(w, {"bootstrap": [["npm", "ci"]]}, gateway.PLAN_SCHEMA)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], gateway.POLICY)
+
     def test_risk_and_escape_policy(self):
         for name in [
             "../src/x.py",
