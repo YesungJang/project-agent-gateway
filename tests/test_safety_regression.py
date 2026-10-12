@@ -22,9 +22,11 @@ import events
 import gateway
 import test_gateway
 
-# Newest pre-instrumentation behaviour: proves instrumentation stayed inert across
-# the measured-validation change. Advance this only for an intended behaviour change.
-BASELINE = '002ac0b'
+# Last approved external behaviour. Up to 002ac0b this proved instrumentation stayed
+# inert; from c6b40f2 it pins the external-operation order and stopping outcomes against
+# unintended change. Advance it only for a behaviour change a human has approved, and to
+# a commit that already contains that change.
+BASELINE = 'c6b40f2'
 
 
 class SafetyRegressionTests(unittest.TestCase):
