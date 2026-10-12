@@ -12,7 +12,7 @@ class Element {
   querySelector(selector){if(selector==='dd')return this.children.find(c=>c.tag==='dd');const match=selector.match(/data-run-id="([^"]+)"/);return match?this.children.find(c=>c.dataset.runId===match[1]):undefined;}
   focus(){document.activeElement=this;}
 }
-const ids=['connection','last-poll','queue-freshness','worker-health','worker-detail','queue-count','run-count','run-list-count','quality','quality-detail','run-list','queue-note','queue-list','legacy-panel','legacy-list','run-summary','pipeline','tasks','delivery','diagnostics','task-progress','diagnostic-count'];
+const ids=['connection','last-poll','queue-freshness','worker-health','worker-detail','queue-count','run-count','run-list-count','quality','quality-detail','run-list','queue-note','queue-list','legacy-panel','legacy-list','run-summary','pipeline','tasks','delivery','diagnostics','task-progress','diagnostic-count','triage','triage-count','triage-list'];
 const elements=Object.fromEntries(ids.map(id=>[id,new Element('div')]));
 const document={activeElement:null,createElement:tag=>new Element(tag),getElementById:id=>elements[id]||findId(id)};
 function findId(id){const scan=e=>e.id===id?e:e.children.map(scan).find(Boolean);return Object.values(elements).map(scan).find(Boolean);}
@@ -27,6 +27,13 @@ vm.runInContext(source,context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements['run-list'].children.length,12);
   assert.equal(elements.pipeline.children.length,7);
+  assert.equal(elements.triage.hidden,false);
+  assert.equal(elements['triage-count'].textContent,'6 runs need a decision');
+  assert.match(elements['triage-list'].textContent,/VERIFIER_RISK · task_gate/);
+  assert.match(elements['triage-list'].textContent,/BOOTSTRAP_FAILED/);
+  assert.equal(elements['triage-list'].children.length,6);
+  elements['triage-list'].children[0].events.click();
+  assert.match(elements['run-summary'].textContent,/Issue #8/);
   const select=issue=>{const button=elements['run-list'].children.find(b=>b.children[0].textContent==='Issue #'+issue);assert.ok(button);button.events.click();};
   select(2);assert.match(elements.tasks.textContent,/Repairs: 1/);
   select(4);assert.match(elements.diagnostics.textContent,/VERIFIER_RISK/);
@@ -49,5 +56,6 @@ vm.runInContext(source,context);
   assert.match(elements['run-summary'].textContent,/No event history/);
   assert.equal(elements['task-progress'].textContent,'—');
   assert.equal(elements['diagnostic-count'].textContent,'0');
-  console.log('DOM boundary checks passed: scenario rendering, selection, ERROR/RISK, skipped, unknown, XSS-as-text and offline warning. Real browser layout remains unverified.');
+  assert.equal(elements.triage.hidden,true);
+  console.log('DOM boundary checks passed: triage of stopped runs, scenario rendering, selection, ERROR/RISK, skipped, unknown, XSS-as-text and offline warning. Real browser layout remains unverified.');
 })().catch(e=>{console.error(e);process.exit(1);});
